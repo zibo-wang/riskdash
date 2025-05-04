@@ -1,0 +1,30 @@
+[project]
+name = "riskdash"
+version = "0.1.0"
+description = "Add your description here"
+authors = [
+    { name = "Zibo Wang", email = "zibo.w@outlook.com" }
+]
+dependencies = [
+    "flask>=3.1.0",
+    "streamlit>=1.45.0",
+    "pandas>=2.2.3",
+    "duckdb>=1.2.2",
+    "watchdog>=6.0.0",
+]
+readme = "README.md"
+requires-python = ">= 3.13"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.rye]
+managed = true
+dev-dependencies = []
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/riskdash"]
