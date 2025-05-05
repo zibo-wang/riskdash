@@ -36,7 +36,23 @@ from db_utils import (
 API_ENDPOINT = (
     "http://127.0.0.1:5001/api/job_status"  # Change to your real API endpoint
 )
-REFRESH_INTERVAL_SECONDS = 60  # How often to fetch API status
+REFRESH_INTERVAL_SECONDS = 10  # How often to fetch API status
+
+# Enable auto-refresh
+st.set_page_config(
+    layout="wide",
+    page_title="SRE Automation Dashboard",
+    initial_sidebar_state="expanded",
+    menu_items={"Get Help": None, "Report a bug": None, "About": None},
+)
+
+# Add auto-refresh meta tag
+st.markdown(
+    f"""
+    <meta http-equiv="refresh" content="{REFRESH_INTERVAL_SECONDS}">
+    """,
+    unsafe_allow_html=True,
+)
 
 # Status levels for ranking
 STATUS_ORDER = {"Critical": 0, "Error": 1, "Warning": 2, "Log": 3}
@@ -61,6 +77,9 @@ if "last_refresh_time" not in st.session_state:
     st.session_state.last_refresh_time = datetime.now()
 if "last_incident_update" not in st.session_state:
     st.session_state.last_incident_update = datetime.now()
+
+# Update last refresh time on each page load
+st.session_state.last_refresh_time = datetime.now()
 
 # --- Helper Functions ---
 
@@ -186,8 +205,6 @@ def display_time_ago(dt_object):
 
 
 # --- Streamlit App Layout ---
-
-st.set_page_config(layout="wide", page_title="SRE Automation Dashboard")
 
 st.title(" SRE Automation Job Status Dashboard")
 
@@ -574,48 +591,3 @@ if history_df is not None and not history_df.empty:
     st.dataframe(history_df_display, use_container_width=True)
 else:
     st.markdown("No incident history recorded yet.")
-
-
-# --- Auto-refresh mechanism ---
-# Streamlit doesn't have a built-in reliable background scheduler visible to the user.
-# The @st.cache_data handles data refresh. Forcing a UI refresh needs a trick.
-# This component forces a rerun every N seconds.
-# Note: This causes the *entire* script to rerun.
-components.html(
-    f"""
-    <script>
-        const interval = {REFRESH_INTERVAL_SECONDS * 1000}; // Convert to milliseconds
-
-        // Function to reload the page (forces Streamlit rerun)
-        const reloadPage = () => {{
-            // Check if any form is currently active to avoid interrupting user input
-            const forms = window.parent.document.querySelectorAll('form');
-            let formActive = false;
-            forms.forEach(form => {{
-                if (form.contains(window.parent.document.activeElement)) {{
-                    formActive = true;
-                }}
-            }});
-
-            // Also check for common Streamlit modal/dialog elements if necessary
-            const modals = window.parent.document.querySelectorAll('[data-testid="stModal"]');
-            let modalActive = modals.length > 0 && modals[0].style.display !== 'none';
-
-            // Only reload if no form or modal seems active
-            if (!formActive && !modalActive) {{
-                window.parent.location.reload();
-            }} else {{
-                console.log('Auto-refresh skipped due to active form/modal.');
-            }}
-        }};
-
-        // Set interval
-        const intervalId = setInterval(reloadPage, interval);
-
-        // Clear interval if the component is ever removed
-        return () => clearInterval(intervalId);
-    </script>
-    """,
-    height=0,
-    width=0,
-)
