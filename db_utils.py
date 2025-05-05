@@ -1,4 +1,14 @@
-# db_utils.py
+"""Database utilities for the SRE Automation Dashboard.
+
+This module provides functions for managing the DuckDB database used by the SRE Automation Dashboard.
+It handles incident logging, engineer management, and job link storage.
+
+The database uses the following tables:
+- incidents: Stores incident response data
+- engineers: Stores L1 and L2 engineer information
+- job_links: Stores links associated with jobs
+"""
+
 import datetime
 import os
 import threading
@@ -12,13 +22,25 @@ db_lock = threading.Lock()
 
 
 def get_db_connection():
-    """Creates or connects to the DuckDB database."""
+    """Creates or connects to the DuckDB database.
+
+    Returns:
+        duckdb.DuckDBPyConnection: A connection to the DuckDB database.
+    """
     conn = duckdb.connect(DB_FILE)
     return conn
 
 
 def init_db():
-    """Initializes the database schema if it doesn't exist."""
+    """Initializes the database schema if it doesn't exist.
+
+    Creates the following tables if they don't exist:
+    - incidents: For storing incident response data
+    - engineers: For storing engineer information
+    - job_links: For storing job-related links
+
+    Also populates the engineers table with default values if empty.
+    """
     with db_lock:
         conn = get_db_connection()
         try:
@@ -78,7 +100,17 @@ def init_db():
 
 
 def log_incident_start(job_name, status, responder, priority):
-    """Logs the start of an incident response."""
+    """Logs the start of an incident response.
+
+    Args:
+        job_name (str): Name of the job experiencing the incident.
+        status (str): Status of the job at the time of incident.
+        responder (str): Name of the engineer responding to the incident.
+        priority (str): Priority level of the incident (P1-P4).
+
+    Returns:
+        int: The incident ID if successful, -1 if failed or if incident already exists.
+    """
     start_time = datetime.datetime.now()
     incident_id = -1
     with db_lock:
@@ -141,7 +173,14 @@ def log_incident_start(job_name, status, responder, priority):
 
 
 def log_incident_resolve(incident_id):
-    """Logs the resolution of an incident and calculates duration."""
+    """Logs the resolution of an incident and calculates duration.
+
+    Args:
+        incident_id (int): The ID of the incident to resolve.
+
+    Returns:
+        bool: True if resolution was successful, False otherwise.
+    """
     end_time = datetime.datetime.now()
     resolved = False
     job_name_resolved = None  # To inform mock API
@@ -196,7 +235,12 @@ def log_incident_resolve(incident_id):
 
 
 def get_active_incidents():
-    """Fetches details of currently active (unresolved) incidents."""
+    """Fetches details of currently active (unresolved) incidents.
+
+    Returns:
+        dict: A dictionary mapping job names to incident details. Each incident detail
+              contains incident_id, responder, priority, and start_time.
+    """
     active = {}
     conn = get_db_connection()
     try:
@@ -227,7 +271,22 @@ def get_active_incidents():
 
 
 def get_incident_history(limit=50):
-    """Fetches recent incident history (resolved and active)."""
+    """Fetches recent incident history (resolved and active).
+
+    Args:
+        limit (int, optional): Maximum number of incidents to return. Defaults to 50.
+
+    Returns:
+        pandas.DataFrame: DataFrame containing incident history with columns:
+            - incident_id
+            - job_name
+            - status_at_incident
+            - priority
+            - responder_name
+            - response_start_time
+            - resolution_time
+            - resolution_duration_seconds
+    """
     history_df = None
     conn = get_db_connection()
     try:
@@ -248,7 +307,13 @@ def get_incident_history(limit=50):
 
 
 def get_engineers():
-    """Returns a dictionary with L1 and L2 engineers."""
+    """Returns a dictionary with L1 and L2 engineers.
+
+    Returns:
+        dict: A dictionary with two keys:
+            - 'L1': List of L1 engineer names
+            - 'L2': List of L2 engineer names
+    """
     engineers = {"L1": [], "L2": []}
     conn = get_db_connection()
     try:
@@ -265,7 +330,15 @@ def get_engineers():
 
 
 def add_engineer(name, level):
-    """Adds a new engineer to the database."""
+    """Adds a new engineer to the database.
+
+    Args:
+        name (str): Name of the engineer.
+        level (str): Level of the engineer ('L1' or 'L2').
+
+    Returns:
+        bool: True if engineer was added successfully, False otherwise.
+    """
     success = False
     with db_lock:
         conn = get_db_connection()
@@ -283,7 +356,14 @@ def add_engineer(name, level):
 
 
 def remove_engineer(name):
-    """Removes an engineer from the database."""
+    """Removes an engineer from the database.
+
+    Args:
+        name (str): Name of the engineer to remove.
+
+    Returns:
+        bool: True if engineer was removed successfully, False otherwise.
+    """
     success = False
     with db_lock:
         conn = get_db_connection()
@@ -298,7 +378,12 @@ def remove_engineer(name):
 
 
 def get_job_links():
-    """Returns a dictionary of job links."""
+    """Returns a dictionary of job links.
+
+    Returns:
+        dict: A dictionary mapping job names to link details. Each link detail
+              contains 'url' and 'text' keys.
+    """
     links = {}
     conn = get_db_connection()
     try:
@@ -315,7 +400,16 @@ def get_job_links():
 
 
 def add_job_link(job_name, url, link_text=None):
-    """Adds or updates a link for a job."""
+    """Adds or updates a link for a job.
+
+    Args:
+        job_name (str): Name of the job to add/update the link for.
+        url (str): URL of the link.
+        link_text (str, optional): Display text for the link. If None, uses the URL.
+
+    Returns:
+        bool: True if link was added/updated successfully, False otherwise.
+    """
     success = False
     with db_lock:
         conn = get_db_connection()
@@ -336,7 +430,14 @@ def add_job_link(job_name, url, link_text=None):
 
 
 def remove_job_link(job_name):
-    """Removes a link for a job."""
+    """Removes a link for a job.
+
+    Args:
+        job_name (str): Name of the job to remove the link for.
+
+    Returns:
+        bool: True if link was removed successfully, False otherwise.
+    """
     success = False
     with db_lock:
         conn = get_db_connection()

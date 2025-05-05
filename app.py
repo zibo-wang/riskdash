@@ -1,4 +1,16 @@
-# app.py
+"""SRE Automation Dashboard Streamlit Application.
+
+This module implements a Streamlit-based dashboard for monitoring and managing SRE automation jobs.
+It provides real-time status monitoring, incident response management, and engineer coordination.
+
+The dashboard features:
+- Real-time job status monitoring
+- Incident response tracking
+- Engineer management
+- Job link management
+- Auto-refresh functionality
+"""
+
 import time
 from datetime import datetime
 
@@ -54,7 +66,11 @@ if "last_incident_update" not in st.session_state:
 
 
 def check_for_updates():
-    """Checks if there have been any changes to active incidents since last refresh."""
+    """Checks if there have been any changes to active incidents since last refresh.
+
+    Returns:
+        bool: True if updates are needed, False otherwise.
+    """
     current_active = get_active_incidents()
     current_time = datetime.now()
 
@@ -75,7 +91,15 @@ def check_for_updates():
 
 @st.cache_data(ttl=REFRESH_INTERVAL_SECONDS)  # Cache API data for interval
 def fetch_job_status(api_url):
-    """Fetches job status list from the API."""
+    """Fetches job status list from the API.
+
+    Args:
+        api_url (str): URL of the API endpoint to fetch job status from.
+
+    Returns:
+        list: List of job status dictionaries, or None if fetch failed.
+              Each job dictionary should contain at least 'name' and 'status' keys.
+    """
     try:
         response = requests.get(api_url, timeout=10)  # Add timeout
         response.raise_for_status()  # Raise exception for bad status codes (4xx or 5xx)
@@ -102,7 +126,14 @@ def fetch_job_status(api_url):
 
 
 def rank_jobs(jobs):
-    """Sorts jobs by critical level and pins responding jobs to the top."""
+    """Sorts jobs by critical level and pins responding jobs to the top.
+
+    Args:
+        jobs (list): List of job status dictionaries.
+
+    Returns:
+        list: Sorted list of jobs with responding jobs at the top.
+    """
     if jobs is None:
         return []
 
@@ -131,7 +162,14 @@ def rank_jobs(jobs):
 
 
 def display_time_ago(dt_object):
-    """Displays a datetime object as 'time ago'."""
+    """Displays a datetime object as 'time ago'.
+
+    Args:
+        dt_object (datetime): The datetime object to format.
+
+    Returns:
+        str: Formatted string showing how long ago the time was.
+    """
     if not dt_object:
         return "N/A"
     now = datetime.now(dt_object.tzinfo)  # Ensure timezone awareness if needed
@@ -153,8 +191,89 @@ st.set_page_config(layout="wide", page_title="SRE Automation Dashboard")
 
 st.title(" SRE Automation Job Status Dashboard")
 
-# Display L1/L2 Engineers
+# Initialize links in session state if not exists
+if "job_links" not in st.session_state:
+    st.session_state.job_links = get_job_links()
+
+# Fetch and display data
+st.subheader("Job Status Overview")
+
+# Create a container for refresh info and align it to the right
+refresh_container = st.container()
+with refresh_container:
+    col1, col2 = st.columns([6, 1])  # Use most of the space for padding
+    with col2:
+        refresh_col1, refresh_col2 = st.columns([2, 1])
+        with refresh_col1:
+            st.markdown(
+                f"Last refresh: {st.session_state.last_refresh_time.strftime('%H:%M:%S')}",
+                unsafe_allow_html=True,
+            )
+        with refresh_col2:
+            if st.button("🔄", key="refresh_button"):
+                st.session_state.last_refresh_time = datetime.now()
+                st.cache_data.clear()  # Clear the cache to force a new API fetch
+                st.rerun()
+
+# Check for updates and force refresh if needed
+if check_for_updates():
+    st.session_state.last_refresh_time = datetime.now()
+    st.cache_data.clear()
+    st.rerun()
+
+api_jobs_raw = fetch_job_status(API_ENDPOINT)
+ranked_jobs = rank_jobs(api_jobs_raw)
+active_incidents = (
+    get_active_incidents()
+)  # Get jobs currently being responded to
+
+# Display Issue Statistics at the very top of sidebar
+st.sidebar.subheader("Issue Statistics")
+
+# Calculate statistics
+if ranked_jobs:
+    # Only count critical and error issues
+    critical_error_issues = [
+        job for job in ranked_jobs if job.get("status") in ["Critical", "Error"]
+    ]
+    total_issues = len(critical_error_issues)
+
+    # Count how many of these critical/error issues are being responded to
+    responded_issues = sum(
+        1
+        for job in critical_error_issues
+        if job.get("name") in active_incidents
+    )
+    pending_issues = total_issues - responded_issues
+
+    # Add color block indicator
+    if pending_issues > 0:
+        st.sidebar.markdown(
+            '<div style="background-color: #ff4b4b; height: 10px; border-radius: 5px; margin-bottom: 10px;"></div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.sidebar.markdown(
+            '<div style="background-color: #00cc96; height: 10px; border-radius: 5px; margin-bottom: 10px;"></div>',
+            unsafe_allow_html=True,
+        )
+
+    # Display statistics with color indicators
+    st.sidebar.markdown(f"**Total Issues:** {total_issues}")
+    st.sidebar.markdown(f"**Responded:** {responded_issues}")
+
+    # Add color indicator for pending issues
+    if pending_issues > 0:
+        st.sidebar.markdown(
+            f"**Pending:** <span style='color: red;'>{pending_issues}</span>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.sidebar.markdown(f"**Pending:** {pending_issues}")
+
 st.sidebar.markdown("---")
+
+# Display L1/L2 Engineers
 st.sidebar.subheader("On-Call Engineers")
 
 # Get current engineers from database
@@ -211,44 +330,6 @@ if st.session_state.show_engineer_form:
         if col2.form_submit_button("Close"):
             st.session_state.show_engineer_form = False
             st.rerun()
-
-st.sidebar.markdown("---")
-
-# Initialize links in session state if not exists
-if "job_links" not in st.session_state:
-    st.session_state.job_links = get_job_links()
-
-# Fetch and display data
-st.subheader("Job Status Overview")
-
-# Create a container for refresh info and align it to the right
-refresh_container = st.container()
-with refresh_container:
-    col1, col2 = st.columns([6, 1])  # Use most of the space for padding
-    with col2:
-        refresh_col1, refresh_col2 = st.columns([2, 1])
-        with refresh_col1:
-            st.markdown(
-                f"Last refresh: {st.session_state.last_refresh_time.strftime('%H:%M:%S')}",
-                unsafe_allow_html=True,
-            )
-        with refresh_col2:
-            if st.button("🔄", key="refresh_button"):
-                st.session_state.last_refresh_time = datetime.now()
-                st.cache_data.clear()  # Clear the cache to force a new API fetch
-                st.rerun()
-
-# Check for updates and force refresh if needed
-if check_for_updates():
-    st.session_state.last_refresh_time = datetime.now()
-    st.cache_data.clear()
-    st.rerun()
-
-api_jobs_raw = fetch_job_status(API_ENDPOINT)
-ranked_jobs = rank_jobs(api_jobs_raw)
-active_incidents = (
-    get_active_incidents()
-)  # Get jobs currently being responded to
 
 if not ranked_jobs:
     st.warning(
@@ -362,6 +443,9 @@ else:
                                     st.write(
                                         f"Debug: Active incidents after logging: {get_active_incidents()}"
                                     )
+                                    # Force immediate refresh to update statistics
+                                    st.cache_data.clear()
+                                    st.rerun()
                                 else:
                                     st.error(
                                         "Failed to log incident start (already active or DB error)."
@@ -535,4 +619,3 @@ components.html(
     height=0,
     width=0,
 )
-# Make sure to import `
