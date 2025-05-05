@@ -46,25 +46,8 @@ st.set_page_config(
     menu_items={"Get Help": None, "Report a bug": None, "About": None},
 )
 
-# Add auto-refresh meta tag
-st.markdown(
-    f"""
-    <meta http-equiv="refresh" content="{REFRESH_INTERVAL_SECONDS}">
-    """,
-    unsafe_allow_html=True,
-)
-
-# Status levels for ranking
-STATUS_ORDER = {"Critical": 0, "Error": 1, "Warning": 2, "Log": 3}
-STATUS_EMOJI = {"Critical": "🔥", "Error": "❌", "Warning": "⚠️", "Log": "📄"}
-PRIORITY_LEVELS = ["P1", "P2", "P3", "P4"]
-
-# --- Initialize Database ---
-# Ensure the table exists when the app starts
-init_db()
-
 # --- State Management ---
-# Use Streamlit's session state to manage temporary UI states like form visibility
+# Initialize all session state variables first
 if "show_respond_form" not in st.session_state:
     st.session_state.show_respond_form = {}  # Dict: {job_name: boolean}
 if "selected_priority" not in st.session_state:
@@ -77,9 +60,53 @@ if "last_refresh_time" not in st.session_state:
     st.session_state.last_refresh_time = datetime.now()
 if "last_incident_update" not in st.session_state:
     st.session_state.last_incident_update = datetime.now()
+if "job_links" not in st.session_state:
+    st.session_state.job_links = get_job_links()
+if "is_editing_link" not in st.session_state:
+    st.session_state.is_editing_link = False
+if "is_editing_engineers" not in st.session_state:
+    st.session_state.is_editing_engineers = False
+if "clicked_link_button" not in st.session_state:
+    st.session_state.clicked_link_button = False
+if "last_refresh" not in st.session_state:
+    st.session_state.last_refresh = time.time()
+
+# --- Auto-refresh logic ---
+# Check if any forms are being edited
+any_forms_open = (
+    st.session_state.is_editing_link
+    or st.session_state.is_editing_engineers
+    or any(st.session_state.show_respond_form.values())
+    or st.session_state.clicked_link_button
+)
+
+# Only refresh if no forms are being edited
+if not any_forms_open:
+    current_time = time.time()
+    if current_time - st.session_state.last_refresh >= REFRESH_INTERVAL_SECONDS:
+        st.session_state.last_refresh = current_time
+        st.rerun()
+
+# Add auto-refresh meta tag only if no forms are open
+if not any_forms_open:
+    st.markdown(
+        f"""
+        <meta http-equiv="refresh" content="{REFRESH_INTERVAL_SECONDS}">
+        """,
+        unsafe_allow_html=True,
+    )
 
 # Update last refresh time on each page load
 st.session_state.last_refresh_time = datetime.now()
+
+# Status levels for ranking
+STATUS_ORDER = {"Critical": 0, "Error": 1, "Warning": 2, "Log": 3}
+STATUS_EMOJI = {"Critical": "🔥", "Error": "❌", "Warning": "⚠️", "Log": "📄"}
+PRIORITY_LEVELS = ["P1", "P2", "P3", "P4"]
+
+# --- Initialize Database ---
+# Ensure the table exists when the app starts
+init_db()
 
 # --- Helper Functions ---
 
@@ -207,10 +234,6 @@ def display_time_ago(dt_object):
 # --- Streamlit App Layout ---
 
 st.title(" SRE Automation Job Status Dashboard")
-
-# Initialize links in session state if not exists
-if "job_links" not in st.session_state:
-    st.session_state.job_links = get_job_links()
 
 # Fetch and display data
 st.subheader("Job Status Overview")
@@ -439,42 +462,56 @@ else:
                     # Only show link button if there's an active incident
                     if job_name in active_incidents:
                         # Add/Edit link button
-                        if st.button("🔗", key=f"link_{job_name}"):
-                            st.session_state[f"show_link_form_{job_name}"] = (
-                                True
-                            )
+                        if st.button("🔗", key=f"edit_link_{job_name}"):
+                            st.session_state.is_editing_link = True
+                            st.session_state.editing_job = job_name
+                            st.session_state.clicked_link_button = True
+                            st.rerun()
 
             # Link form
-            if st.session_state.get(f"show_link_form_{job_name}", False):
+            if (
+                st.session_state.is_editing_link
+                and st.session_state.editing_job == job_name
+            ):
                 with st.form(key=f"link_form_{job_name}"):
-                    link_url = st.text_input("URL", key=f"url_{job_name}")
-                    link_text = st.text_input(
-                        "Link Text", key=f"text_{job_name}"
+                    st.text_input(
+                        "Link Text",
+                        value=st.session_state.job_links.get(
+                            active_incident_info["incident_id"], {}
+                        ).get("text", ""),
+                        key=f"link_text_{job_name}",
                     )
-
+                    st.text_input(
+                        "URL",
+                        value=st.session_state.job_links.get(
+                            active_incident_info["incident_id"], {}
+                        ).get("url", ""),
+                        key=f"link_url_{job_name}",
+                    )
                     col1, col2 = st.columns(2)
-                    if col1.form_submit_button("✓"):
-                        if link_url and active_incident_info:
-                            if add_job_link(
-                                active_incident_info["incident_id"],
-                                link_url,
-                                link_text,
-                            ):
-                                st.session_state.job_links = (
-                                    get_job_links()
-                                )  # Refresh links from DB
-                                st.session_state[
-                                    f"show_link_form_{job_name}"
-                                ] = False
-                                st.rerun()
-                            else:
-                                st.error(
-                                    "Failed to save link. Please try again."
-                                )
-
-                    if col2.form_submit_button("✗"):
-                        st.session_state[f"show_link_form_{job_name}"] = False
-                        st.rerun()
+                    with col1:
+                        if st.form_submit_button("✓"):
+                            link_text = st.session_state[
+                                f"link_text_{job_name}"
+                            ]
+                            link_url = st.session_state[f"link_url_{job_name}"]
+                            if link_url and active_incident_info:
+                                if add_job_link(
+                                    active_incident_info["incident_id"],
+                                    link_url,
+                                    link_text,
+                                ):
+                                    st.session_state.job_links = get_job_links()
+                                    st.session_state.is_editing_link = False
+                                    st.session_state.editing_job = None
+                                    st.session_state.clicked_link_button = False
+                                    st.rerun()
+                    with col2:
+                        if st.form_submit_button("✗"):
+                            st.session_state.is_editing_link = False
+                            st.session_state.editing_job = None
+                            st.session_state.clicked_link_button = False
+                            st.rerun()
 
         with col8:  # Action button column
             if active_incident_info:

@@ -68,7 +68,7 @@ def init_db():
             # Add job links table
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS job_links (
-                    job_name VARCHAR PRIMARY KEY,
+                    incident_id INTEGER PRIMARY KEY,
                     url VARCHAR NOT NULL,
                     link_text VARCHAR,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -381,17 +381,17 @@ def get_job_links():
     """Returns a dictionary of job links.
 
     Returns:
-        dict: A dictionary mapping job names to link details. Each link detail
+        dict: A dictionary mapping incident IDs to link details. Each link detail
               contains 'url' and 'text' keys.
     """
     links = {}
     conn = get_db_connection()
     try:
         results = conn.execute(
-            "SELECT job_name, url, link_text FROM job_links"
+            "SELECT incident_id, url, link_text FROM job_links"
         ).fetchall()
-        for job_name, url, link_text in results:
-            links[job_name] = {"url": url, "text": link_text or url}
+        for incident_id, url, link_text in results:
+            links[incident_id] = {"url": url, "text": link_text or url}
     except Exception as e:
         print(f"Error fetching job links: {e}")
     finally:
@@ -399,11 +399,11 @@ def get_job_links():
     return links
 
 
-def add_job_link(job_name, url, link_text=None):
-    """Adds or updates a link for a job.
+def add_job_link(incident_id, url, link_text=None):
+    """Adds or updates a link for an incident.
 
     Args:
-        job_name (str): Name of the job to add/update the link for.
+        incident_id (int): ID of the incident to add/update the link for.
         url (str): URL of the link.
         link_text (str, optional): Display text for the link. If None, uses the URL.
 
@@ -416,10 +416,10 @@ def add_job_link(job_name, url, link_text=None):
         try:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO job_links (job_name, url, link_text)
+                INSERT OR REPLACE INTO job_links (incident_id, url, link_text)
                 VALUES (?, ?, ?)
             """,
-                (job_name, url, link_text),
+                (incident_id, url, link_text),
             )
             success = True
         except Exception as e:
@@ -429,11 +429,11 @@ def add_job_link(job_name, url, link_text=None):
     return success
 
 
-def remove_job_link(job_name):
-    """Removes a link for a job.
+def remove_job_link(incident_id):
+    """Removes a link for an incident.
 
     Args:
-        job_name (str): Name of the job to remove the link for.
+        incident_id (int): ID of the incident to remove the link for.
 
     Returns:
         bool: True if link was removed successfully, False otherwise.
@@ -443,7 +443,7 @@ def remove_job_link(job_name):
         conn = get_db_connection()
         try:
             conn.execute(
-                "DELETE FROM job_links WHERE job_name = ?", (job_name,)
+                "DELETE FROM job_links WHERE incident_id = ?", (incident_id,)
             )
             success = True
         except Exception as e:
