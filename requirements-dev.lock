@@ -37,6 +37,7 @@ gitpython==3.1.44
     # via streamlit
 idna==3.10
     # via requests
+isort==6.0.1
 itsdangerous==2.2.0
     # via flask
 jinja2==3.1.6
@@ -82,6 +83,7 @@ requests==2.32.3
 rpds-py==0.24.0
     # via jsonschema
     # via referencing
+ruff==0.11.8
 six==1.17.0
     # via python-dateutil
 smmap==5.0.2

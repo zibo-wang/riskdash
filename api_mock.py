@@ -1,7 +1,8 @@
 # api_mock.py
-import flask
 import random
 import time
+
+import flask
 from flask import Flask, jsonify
 
 app = Flask(__name__)
