@@ -71,6 +71,16 @@ if "clicked_link_button" not in st.session_state:
     st.session_state.clicked_link_button = False
 if "last_refresh" not in st.session_state:
     st.session_state.last_refresh = time.time()
+if "incident_detection_times" not in st.session_state:
+    st.session_state.incident_detection_times = {}  # Dict: {job_name: detection_time}
+if "engineers" not in st.session_state:
+    st.session_state.engineers = get_engineers()
+if "editing_engineers" not in st.session_state:
+    st.session_state.editing_engineers = False
+if "editing_link" not in st.session_state:
+    st.session_state.editing_link = None
+if "editing_priority" not in st.session_state:
+    st.session_state.editing_priority = None
 
 # --- Auto-refresh logic ---
 # Check if any forms are being edited
@@ -230,6 +240,86 @@ def display_time_ago(dt_object):
         return f"{int(seconds // 3600)}h ago"
     else:
         return f"{int(seconds // 86400)}d ago"
+
+
+def check_slow_response(job_name, status):
+    """Check if an incident has been waiting for response for more than 20 seconds."""
+    if status not in ["Critical", "Error"]:
+        print(f"Debug - {job_name}: Not Critical/Error status")
+        return False
+
+    # Don't highlight if someone is already responding
+    if job_name in active_incidents:
+        print(f"Debug - {job_name}: Already being responded to")
+        return False
+
+    # Get detection time from database
+    conn = get_db_connection()
+    try:
+        result = conn.execute(
+            """
+            SELECT response_start_time 
+            FROM incidents 
+            WHERE job_name = ? 
+            AND resolution_time IS NULL 
+            ORDER BY response_start_time DESC 
+            LIMIT 1
+            """,
+            [job_name],
+        ).fetchone()
+
+        if result:
+            start_time = result[0]
+            elapsed_seconds = (
+                datetime.datetime.now() - start_time
+            ).total_seconds()
+            print(
+                f"Debug - {job_name}: Elapsed time: {elapsed_seconds:.1f} seconds"
+            )
+            is_slow = elapsed_seconds > 20
+            print(f"Debug - {job_name}: Is slow response: {is_slow}")
+            return is_slow
+        else:
+            print(f"Debug - {job_name}: No active incident found")
+    except Exception as e:
+        print(f"Error checking slow response: {e}")
+    finally:
+        conn.close()
+
+    return False
+
+
+def get_row_style(job_name, status):
+    """Get the style for a row based on response time.
+
+    Args:
+        job_name (str): Name of the job
+        status (str): Current status of the job
+
+    Returns:
+        str: CSS style string
+    """
+    is_slow = check_slow_response(job_name, status)
+    if is_slow:
+        return """
+            <style>
+                @keyframes flash {
+                    0% { opacity: 1; }
+                    50% { opacity: 0.5; }
+                    100% { opacity: 1; }
+                }
+                .flash-indicator {
+                    display: inline-block;
+                    width: 20px;
+                    height: 20px;
+                    background-color: #ff0000;
+                    border-radius: 50%;
+                    margin-right: 10px;
+                    animation: flash 1s infinite;
+                }
+            </style>
+        """
+    return ""
 
 
 # --- Streamlit App Layout ---
@@ -397,285 +487,328 @@ else:
         status = job.get("status", "Unknown")
         status_icon = STATUS_EMOJI.get(status, "❓")
 
-        col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(
-            [3, 1, 1, 1, 2, 2, 2, 2]
-        )
-        col1.markdown(f"**{job_name}**")
-        col2.markdown(f"{status_icon} {status}")
+        # Get row style based on response time
+        row_style = get_row_style(job_name, status)
+        if row_style:
+            st.markdown(row_style, unsafe_allow_html=True)
 
-        # --- Incident Handling Logic ---
-        is_critical_or_error = status in ["Critical", "Error"]
-        active_incident_info = active_incidents.get(job_name)
+        # Create a container for the row
+        with st.container():
+            # Create columns for the row content
+            col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(
+                [3, 1, 1, 1, 2, 2, 2, 2]
+            )
 
-        with col3:  # Responder column
-            if active_incident_info:
-                st.markdown(f"**{active_incident_info['responder']}**")
-            else:
-                st.markdown("-")
+            # Add flashing indicator and job name in the first column
+            with col1:
+                if check_slow_response(job_name, status):
+                    st.markdown(
+                        '<div class="flash-indicator"></div>',
+                        unsafe_allow_html=True,
+                    )
+                st.markdown(f"**{job_name}**")
 
-        with col4:  # Priority column
-            if active_incident_info:
-                if st.button("✏️", key=f"edit_priority_{job_name}"):
-                    st.session_state.show_priority_form = True
-                    st.session_state.editing_priority_job = job_name
-                    st.rerun()
+            col2.markdown(f"{status_icon} {status}")
 
+            # --- Incident Handling Logic ---
+            is_critical_or_error = status in ["Critical", "Error"]
+            active_incident_info = active_incidents.get(job_name)
+
+            with col3:  # Responder column
+                if active_incident_info:
+                    st.markdown(f"**{active_incident_info['responder']}**")
+                else:
+                    st.markdown("-")
+
+            with col4:  # Priority column
+                if active_incident_info:
+                    if st.button("✏️", key=f"edit_priority_{job_name}"):
+                        st.session_state.show_priority_form = True
+                        st.session_state.editing_priority_job = job_name
+                        st.rerun()
+
+                    if (
+                        st.session_state.get("show_priority_form", False)
+                        and st.session_state.get("editing_priority_job")
+                        == job_name
+                    ):
+                        with st.form(key=f"priority_form_{job_name}"):
+                            new_priority = st.radio(
+                                "Priority:",
+                                PRIORITY_LEVELS,
+                                key=f"new_priority_{job_name}",
+                                horizontal=True,
+                                index=PRIORITY_LEVELS.index(
+                                    active_incident_info["priority"]
+                                ),
+                            )
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                if st.form_submit_button("✓"):
+                                    # Update priority in database
+                                    conn = get_db_connection()
+                                    try:
+                                        conn.execute(
+                                            """
+                                            UPDATE incidents
+                                            SET priority = ?
+                                            WHERE incident_id = ?
+                                            """,
+                                            (
+                                                new_priority,
+                                                active_incident_info[
+                                                    "incident_id"
+                                                ],
+                                            ),
+                                        )
+                                        st.session_state.show_priority_form = (
+                                            False
+                                        )
+                                        st.session_state.editing_priority_job = None
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(
+                                            f"Failed to update priority: {e}"
+                                        )
+                                    finally:
+                                        conn.close()
+                            with col2:
+                                if st.form_submit_button("✗"):
+                                    st.session_state.show_priority_form = False
+                                    st.session_state.editing_priority_job = None
+                                    st.rerun()
+                else:
+                    st.markdown("-")
+
+            with col5:  # Response Time column
+                if active_incident_info:
+                    start_time = active_incident_info.get("start_time")
+                    st.markdown(f"Ongoing: {display_time_ago(start_time)}")
+                else:
+                    st.markdown("-")  # Placeholder if not active
+
+            with col6:  # Duration column
                 if (
-                    st.session_state.get("show_priority_form", False)
-                    and st.session_state.get("editing_priority_job") == job_name
+                    active_incident_info
+                    and "start_time" in active_incident_info
                 ):
-                    with st.form(key=f"priority_form_{job_name}"):
-                        new_priority = st.radio(
-                            "Priority:",
-                            PRIORITY_LEVELS,
-                            key=f"new_priority_{job_name}",
-                            horizontal=True,
-                            index=PRIORITY_LEVELS.index(
-                                active_incident_info["priority"]
-                            ),
+                    start_time = active_incident_info["start_time"]
+                    duration = datetime.now() - start_time
+                    hours = int(duration.total_seconds() // 3600)
+                    minutes = int((duration.total_seconds() % 3600) // 60)
+                    seconds = int(duration.total_seconds() % 60)
+                    st.markdown(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+                else:
+                    st.markdown("-")
+
+            with col7:  # Links column
+                # Create a container for the link and button
+                link_container = st.container()
+                with link_container:
+                    link_col1, link_col2 = st.columns([4, 1])
+
+                    with link_col1:
+                        # Display existing link if any
+                        if (
+                            active_incident_info
+                            and active_incident_info["incident_id"]
+                            in st.session_state.job_links
+                        ):
+                            link_data = st.session_state.job_links[
+                                active_incident_info["incident_id"]
+                            ]
+                            st.markdown(
+                                f"🔗 [{link_data['text']}]({link_data['url']})"
+                            )
+                        else:
+                            st.markdown("•")
+
+                    with link_col2:
+                        # Only show link button if there's an active incident
+                        if job_name in active_incidents:
+                            # Add/Edit link button
+                            if st.button("🔗", key=f"edit_link_{job_name}"):
+                                # Set all states to pause refresh
+                                st.session_state.is_editing_link = True
+                                st.session_state.editing_job = job_name
+                                st.session_state.clicked_link_button = True
+                                # Force a rerun to show the form
+                                st.rerun()
+
+                # Link form
+                if (
+                    st.session_state.is_editing_link
+                    and st.session_state.editing_job == job_name
+                ):
+                    with st.form(key=f"link_form_{job_name}"):
+                        st.text_input(
+                            "Link Text",
+                            value=st.session_state.job_links.get(
+                                active_incident_info["incident_id"], {}
+                            ).get("text", ""),
+                            key=f"link_text_{job_name}",
+                        )
+                        st.text_input(
+                            "URL",
+                            value=st.session_state.job_links.get(
+                                active_incident_info["incident_id"], {}
+                            ).get("url", ""),
+                            key=f"link_url_{job_name}",
                         )
                         col1, col2 = st.columns(2)
                         with col1:
                             if st.form_submit_button("✓"):
-                                # Update priority in database
-                                conn = get_db_connection()
-                                try:
-                                    conn.execute(
-                                        """
-                                        UPDATE incidents
-                                        SET priority = ?
-                                        WHERE incident_id = ?
-                                        """,
-                                        (
-                                            new_priority,
-                                            active_incident_info["incident_id"],
-                                        ),
-                                    )
-                                    st.session_state.show_priority_form = False
-                                    st.session_state.editing_priority_job = None
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Failed to update priority: {e}")
-                                finally:
-                                    conn.close()
+                                link_text = st.session_state[
+                                    f"link_text_{job_name}"
+                                ]
+                                link_url = st.session_state[
+                                    f"link_url_{job_name}"
+                                ]
+                                if link_url and active_incident_info:
+                                    if add_job_link(
+                                        active_incident_info["incident_id"],
+                                        link_url,
+                                        link_text,
+                                    ):
+                                        st.session_state.job_links = (
+                                            get_job_links()
+                                        )
+                                        # Reset all states to resume refresh
+                                        st.session_state.is_editing_link = False
+                                        st.session_state.editing_job = None
+                                        st.session_state.clicked_link_button = (
+                                            False
+                                        )
+                                        st.rerun()
                         with col2:
                             if st.form_submit_button("✗"):
-                                st.session_state.show_priority_form = False
-                                st.session_state.editing_priority_job = None
+                                # Reset all states to resume refresh
+                                st.session_state.is_editing_link = False
+                                st.session_state.editing_job = None
+                                st.session_state.clicked_link_button = False
                                 st.rerun()
-                else:
-                    st.markdown(f"**{active_incident_info['priority']}**")
-            else:
-                st.markdown("-")
 
-        with col5:  # Response Time column
-            if active_incident_info:
-                start_time = active_incident_info.get("start_time")
-                st.markdown(f"Ongoing: {display_time_ago(start_time)}")
-            else:
-                st.markdown("-")  # Placeholder if not active
+            st.markdown("</div>", unsafe_allow_html=True)
 
-        with col6:  # Duration column
-            if active_incident_info and "start_time" in active_incident_info:
-                start_time = active_incident_info["start_time"]
-                duration = datetime.now() - start_time
-                hours = int(duration.total_seconds() // 3600)
-                minutes = int((duration.total_seconds() % 3600) // 60)
-                seconds = int(duration.total_seconds() % 60)
-                st.markdown(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
-            else:
-                st.markdown("-")
-
-        with col7:  # Links column
-            # Create a container for the link and button
-            link_container = st.container()
-            with link_container:
-                link_col1, link_col2 = st.columns([4, 1])
-
-                with link_col1:
-                    # Display existing link if any
-                    if (
-                        active_incident_info
-                        and active_incident_info["incident_id"]
-                        in st.session_state.job_links
+            with col8:  # Action button column
+                if active_incident_info:
+                    # Job is currently being responded to
+                    incident_id = active_incident_info["incident_id"]
+                    resolve_key = f"resolve_{job_name}_{incident_id}"
+                    if st.button(
+                        "Resolve Incident", key=resolve_key, type="primary"
                     ):
-                        link_data = st.session_state.job_links[
-                            active_incident_info["incident_id"]
-                        ]
-                        st.markdown(
-                            f"🔗 [{link_data['text']}]({link_data['url']})"
-                        )
-                    else:
-                        st.markdown("•")
-
-                with link_col2:
-                    # Only show link button if there's an active incident
-                    if job_name in active_incidents:
-                        # Add/Edit link button
-                        if st.button("🔗", key=f"edit_link_{job_name}"):
-                            # Set all states to pause refresh
-                            st.session_state.is_editing_link = True
-                            st.session_state.editing_job = job_name
-                            st.session_state.clicked_link_button = True
-                            # Force a rerun to show the form
-                            st.rerun()
-
-            # Link form
-            if (
-                st.session_state.is_editing_link
-                and st.session_state.editing_job == job_name
-            ):
-                with st.form(key=f"link_form_{job_name}"):
-                    st.text_input(
-                        "Link Text",
-                        value=st.session_state.job_links.get(
-                            active_incident_info["incident_id"], {}
-                        ).get("text", ""),
-                        key=f"link_text_{job_name}",
-                    )
-                    st.text_input(
-                        "URL",
-                        value=st.session_state.job_links.get(
-                            active_incident_info["incident_id"], {}
-                        ).get("url", ""),
-                        key=f"link_url_{job_name}",
-                    )
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        if st.form_submit_button("✓"):
-                            link_text = st.session_state[
-                                f"link_text_{job_name}"
-                            ]
-                            link_url = st.session_state[f"link_url_{job_name}"]
-                            if link_url and active_incident_info:
-                                if add_job_link(
-                                    active_incident_info["incident_id"],
-                                    link_url,
-                                    link_text,
-                                ):
-                                    st.session_state.job_links = get_job_links()
-                                    # Reset all states to resume refresh
-                                    st.session_state.is_editing_link = False
-                                    st.session_state.editing_job = None
-                                    st.session_state.clicked_link_button = False
-                                    st.rerun()
-                    with col2:
-                        if st.form_submit_button("✗"):
-                            # Reset all states to resume refresh
-                            st.session_state.is_editing_link = False
-                            st.session_state.editing_job = None
-                            st.session_state.clicked_link_button = False
-                            st.rerun()
-
-        with col8:  # Action button column
-            if active_incident_info:
-                # Job is currently being responded to
-                incident_id = active_incident_info["incident_id"]
-                resolve_key = f"resolve_{job_name}_{incident_id}"
-                if st.button(
-                    "Resolve Incident", key=resolve_key, type="primary"
-                ):
-                    resolved = log_incident_resolve(incident_id)
-                    if resolved:
-                        st.success(
-                            f"Incident {incident_id} for {job_name} marked as resolved."
-                        )
-                        # Clear any lingering form state for this job
-                        st.session_state.show_respond_form.pop(job_name, None)
-                        st.session_state.selected_priority.pop(job_name, None)
-                        st.session_state.selected_assignee.pop(job_name, None)
-                        st.rerun()  # Force immediate refresh
-                    else:
-                        st.error(
-                            "Failed to resolve incident (already resolved or DB error)."
-                        )
-                        st.rerun()  # Refresh anyway to potentially clear state
-
-            elif is_critical_or_error:
-                # Job needs response, show button or form
-                respond_key = f"respond_{job_name}"
-                form_key = f"form_{job_name}"
-
-                if st.session_state.show_respond_form.get(job_name, False):
-                    # Display the response form
-                    with st.form(key=form_key):
-                        st.markdown("**Respond to Incident**")
-                        priority = st.radio(
-                            "Priority:",
-                            PRIORITY_LEVELS,
-                            key=f"priority_{job_name}",
-                            horizontal=True,
-                            index=PRIORITY_LEVELS.index(
-                                st.session_state.selected_priority.get(
-                                    job_name, "P3"
-                                )
-                            ),  # Default P3
-                        )
-                        assignee = st.selectbox(
-                            "Assign To:",
-                            ALL_ENGINEERS,
-                            key=f"assignee_{job_name}",
-                            index=ALL_ENGINEERS.index(
-                                st.session_state.selected_assignee.get(
-                                    job_name, ALL_ENGINEERS[0]
-                                )
-                            ),  # Default first engineer
-                        )
-                        submitted = st.form_submit_button("Confirm Response")
-                        if submitted:
-                            # --- CRITICAL SECTION for starting response ---
-                            # Re-check active incidents *just before* logging
-                            current_active = get_active_incidents()
-                            if job_name in current_active:
-                                st.warning(
-                                    f"{job_name} is already being handled by {current_active[job_name]['responder']}. Refreshing."
-                                )
-                            else:
-                                incident_id = log_incident_start(
-                                    job_name, status, assignee, priority
-                                )
-                                if incident_id != -1:
-                                    st.success(
-                                        f"Response logged for {job_name} (Incident {incident_id}). Assigned to {assignee} ({priority})."
-                                    )
-                                    # Add debug logging
-                                    st.write(
-                                        f"Debug: Active incidents after logging: {get_active_incidents()}"
-                                    )
-                                    # Force immediate refresh to update statistics
-                                    st.cache_data.clear()
-                                    st.rerun()
-                                else:
-                                    st.error(
-                                        "Failed to log incident start (already active or DB error)."
-                                    )  # log_incident_start handles check now
-
-                            # Reset form state regardless of success/failure logging
-                            st.session_state.show_respond_form[job_name] = False
-                            st.session_state.selected_priority[job_name] = (
-                                priority
+                        resolved = log_incident_resolve(incident_id)
+                        if resolved:
+                            st.success(
+                                f"Incident {incident_id} for {job_name} marked as resolved."
                             )
-                            st.session_state.selected_assignee[job_name] = (
-                                assignee
+                            # Clear any lingering form state for this job
+                            st.session_state.show_respond_form.pop(
+                                job_name, None
+                            )
+                            st.session_state.selected_priority.pop(
+                                job_name, None
+                            )
+                            st.session_state.selected_assignee.pop(
+                                job_name, None
                             )
                             st.rerun()  # Force immediate refresh
+                        else:
+                            st.error(
+                                "Failed to resolve incident (already resolved or DB error)."
+                            )
+                            st.rerun()  # Refresh anyway to potentially clear state
+
+                elif is_critical_or_error:
+                    # Job needs response, show button or form
+                    respond_key = f"respond_{job_name}"
+                    form_key = f"form_{job_name}"
+
+                    if st.session_state.show_respond_form.get(job_name, False):
+                        # Display the response form
+                        with st.form(key=form_key):
+                            st.markdown("**Respond to Incident**")
+                            priority = st.radio(
+                                "Priority:",
+                                PRIORITY_LEVELS,
+                                key=f"priority_{job_name}",
+                                horizontal=True,
+                                index=PRIORITY_LEVELS.index(
+                                    st.session_state.selected_priority.get(
+                                        job_name, "P3"
+                                    )
+                                ),  # Default P3
+                            )
+                            assignee = st.selectbox(
+                                "Assign To:",
+                                ALL_ENGINEERS,
+                                key=f"assignee_{job_name}",
+                                index=ALL_ENGINEERS.index(
+                                    st.session_state.selected_assignee.get(
+                                        job_name, ALL_ENGINEERS[0]
+                                    )
+                                ),  # Default first engineer
+                            )
+                            submitted = st.form_submit_button(
+                                "Confirm Response"
+                            )
+                            if submitted:
+                                # --- CRITICAL SECTION for starting response ---
+                                # Re-check active incidents *just before* logging
+                                current_active = get_active_incidents()
+                                if job_name in current_active:
+                                    st.warning(
+                                        f"{job_name} is already being handled by {current_active[job_name]['responder']}. Refreshing."
+                                    )
+                                else:
+                                    incident_id = log_incident_start(
+                                        job_name, status, assignee, priority
+                                    )
+                                    if incident_id != -1:
+                                        st.success(
+                                            f"Response logged for {job_name} (Incident {incident_id}). Assigned to {assignee} ({priority})."
+                                        )
+                                        # Add debug logging
+                                        st.write(
+                                            f"Debug: Active incidents after logging: {get_active_incidents()}"
+                                        )
+                                        # Force immediate refresh to update statistics
+                                        st.cache_data.clear()
+                                        st.rerun()
+                                    else:
+                                        st.error(
+                                            "Failed to log incident start (already active or DB error)."
+                                        )  # log_incident_start handles check now
+
+                                # Reset form state regardless of success/failure logging
+                                st.session_state.show_respond_form[job_name] = (
+                                    False
+                                )
+                                st.session_state.selected_priority[job_name] = (
+                                    priority
+                                )
+                                st.session_state.selected_assignee[job_name] = (
+                                    assignee
+                                )
+                                st.rerun()  # Force immediate refresh
+                    else:
+                        # Show the "Respond Incident" button
+                        if st.button("Respond Incident", key=respond_key):
+                            # Set state to show the form on the next rerun
+                            st.session_state.show_respond_form[job_name] = True
+                            # Pre-populate state for form defaults if needed
+                            st.session_state.selected_priority[job_name] = "P3"
+                            st.session_state.selected_assignee[job_name] = (
+                                ALL_ENGINEERS[0]
+                            )
+                            st.rerun()  # Rerun to display the form
+
                 else:
-                    # Show the "Respond Incident" button
-                    if st.button("Respond Incident", key=respond_key):
-                        # Set state to show the form on the next rerun
-                        st.session_state.show_respond_form[job_name] = True
-                        # Pre-populate state for form defaults if needed
-                        st.session_state.selected_priority[job_name] = "P3"
-                        st.session_state.selected_assignee[job_name] = (
-                            ALL_ENGINEERS[0]
-                        )
-                        st.rerun()  # Rerun to display the form
+                    # Status is Warning or Log, no action needed
+                    st.markdown("*(No action)*")
 
-            else:
-                # Status is Warning or Log, no action needed
-                st.markdown("*(No action)*")
-
-        st.markdown("---")  # Separator between jobs
+            st.markdown("---")  # Separator between jobs
 
 # --- Incident History ---
 st.subheader("Recent Incident History")
@@ -687,26 +820,32 @@ if history_df is not None and not history_df.empty:
     history_df = history_df[history_df["response_start_time"] >= five_days_ago]
 
     # Create columns for layout
-    col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(
-        [1, 2, 2, 1, 2, 2, 2, 1]
+    col1, col2, col3, col4, col5, col6, col7, col8, col9 = st.columns(
+        [1, 2, 2, 1, 2, 2, 2, 2, 1]
     )
     col1.markdown("**ID**")
     col2.markdown("**Job Name**")
     col3.markdown("**Responder**")
     col4.markdown("**Priority**")
-    col5.markdown("**Start Time**")
-    col6.markdown("**End Time**")
-    col7.markdown("**Duration**")
-    col8.markdown("**Links**")
+    col5.markdown("**Detection Time**")
+    col6.markdown("**Start Time**")
+    col7.markdown("**End Time**")
+    col8.markdown("**Duration**")
+    col9.markdown("**Links**")
 
     st.markdown("---")  # Separator
 
     for _, row in history_df.iterrows():
-        col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(
-            [1, 2, 2, 1, 2, 2, 2, 1]
+        col1, col2, col3, col4, col5, col6, col7, col8, col9 = st.columns(
+            [1, 2, 2, 1, 2, 2, 2, 2, 1]
         )
 
-        # Format the time
+        # Format the times
+        detection_time = (
+            pd.to_datetime(row["detection_time"]).strftime("%Y-%m-%d %H:%M:%S")
+            if "detection_time" in row and pd.notna(row["detection_time"])
+            else "-"
+        )
         start_time = pd.to_datetime(row["response_start_time"]).strftime(
             "%Y-%m-%d %H:%M:%S"
         )
@@ -730,11 +869,12 @@ if history_df is not None and not history_df.empty:
         col2.markdown(f"**{row['job_name']}**")
         col3.markdown(f"{row['responder_name']}")
         col4.markdown(f"**{row['priority']}**")
-        col5.markdown(start_time)
-        col6.markdown(resolution_time)
-        col7.markdown(duration)
+        col5.markdown(detection_time)
+        col6.markdown(start_time)
+        col7.markdown(resolution_time)
+        col8.markdown(duration)
 
-        with col8:  # Links column
+        with col9:  # Links column
             if row["incident_id"] in st.session_state.job_links:
                 link_data = st.session_state.job_links[row["incident_id"]]
                 st.markdown(f"🔗 [{link_data['text']}]({link_data['url']})")

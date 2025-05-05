@@ -49,6 +49,7 @@ def init_db():
                     incident_id INTEGER PRIMARY KEY,
                     job_name VARCHAR NOT NULL,
                     status_at_incident VARCHAR NOT NULL,
+                    detection_time TIMESTAMP NOT NULL,
                     response_start_time TIMESTAMP NOT NULL,
                     responder_name VARCHAR,
                     priority VARCHAR,
@@ -112,6 +113,7 @@ def log_incident_start(job_name, status, responder, priority):
         int: The incident ID if successful, -1 if failed or if incident already exists.
     """
     start_time = datetime.datetime.now()
+    detection_time = start_time  # For now, use the same time as start time
     incident_id = -1
     with db_lock:
         conn = get_db_connection()
@@ -136,14 +138,15 @@ def log_incident_start(job_name, status, responder, priority):
 
                 cursor = conn.execute(
                     """
-                    INSERT INTO incidents (incident_id, job_name, status_at_incident, response_start_time, responder_name, priority, resolution_time, resolution_duration_seconds)
-                    VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)
+                    INSERT INTO incidents (incident_id, job_name, status_at_incident, detection_time, response_start_time, responder_name, priority, resolution_time, resolution_duration_seconds)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)
                     RETURNING incident_id;
                     """,
                     (
                         next_id,
                         job_name,
                         status,
+                        detection_time,
                         start_time,
                         responder,
                         priority,
@@ -283,6 +286,7 @@ def get_incident_history(limit=50):
             - status_at_incident
             - priority
             - responder_name
+            - detection_time
             - response_start_time
             - resolution_time
             - resolution_duration_seconds
@@ -293,7 +297,7 @@ def get_incident_history(limit=50):
         history_df = conn.execute(
             f"""
              SELECT incident_id, job_name, status_at_incident, priority, responder_name,
-                    response_start_time, resolution_time, resolution_duration_seconds
+                    detection_time, response_start_time, resolution_time, resolution_duration_seconds
              FROM incidents
              ORDER BY response_start_time DESC
              LIMIT {limit}
