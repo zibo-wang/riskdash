@@ -22,6 +22,7 @@ from db_utils import (
     add_engineer,
     add_job_link,
     get_active_incidents,
+    get_db_connection,
     get_engineers,
     get_incident_history,
     get_job_links,
@@ -414,7 +415,56 @@ else:
 
         with col4:  # Priority column
             if active_incident_info:
-                st.markdown(f"**{active_incident_info['priority']}**")
+                if st.button("✏️", key=f"edit_priority_{job_name}"):
+                    st.session_state.show_priority_form = True
+                    st.session_state.editing_priority_job = job_name
+                    st.rerun()
+
+                if (
+                    st.session_state.get("show_priority_form", False)
+                    and st.session_state.get("editing_priority_job") == job_name
+                ):
+                    with st.form(key=f"priority_form_{job_name}"):
+                        new_priority = st.radio(
+                            "Priority:",
+                            PRIORITY_LEVELS,
+                            key=f"new_priority_{job_name}",
+                            horizontal=True,
+                            index=PRIORITY_LEVELS.index(
+                                active_incident_info["priority"]
+                            ),
+                        )
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.form_submit_button("✓"):
+                                # Update priority in database
+                                conn = get_db_connection()
+                                try:
+                                    conn.execute(
+                                        """
+                                        UPDATE incidents
+                                        SET priority = ?
+                                        WHERE incident_id = ?
+                                        """,
+                                        (
+                                            new_priority,
+                                            active_incident_info["incident_id"],
+                                        ),
+                                    )
+                                    st.session_state.show_priority_form = False
+                                    st.session_state.editing_priority_job = None
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Failed to update priority: {e}")
+                                finally:
+                                    conn.close()
+                        with col2:
+                            if st.form_submit_button("✗"):
+                                st.session_state.show_priority_form = False
+                                st.session_state.editing_priority_job = None
+                                st.rerun()
+                else:
+                    st.markdown(f"**{active_incident_info['priority']}**")
             else:
                 st.markdown("-")
 
@@ -463,9 +513,11 @@ else:
                     if job_name in active_incidents:
                         # Add/Edit link button
                         if st.button("🔗", key=f"edit_link_{job_name}"):
+                            # Set all states to pause refresh
                             st.session_state.is_editing_link = True
                             st.session_state.editing_job = job_name
                             st.session_state.clicked_link_button = True
+                            # Force a rerun to show the form
                             st.rerun()
 
             # Link form
@@ -502,12 +554,14 @@ else:
                                     link_text,
                                 ):
                                     st.session_state.job_links = get_job_links()
+                                    # Reset all states to resume refresh
                                     st.session_state.is_editing_link = False
                                     st.session_state.editing_job = None
                                     st.session_state.clicked_link_button = False
                                     st.rerun()
                     with col2:
                         if st.form_submit_button("✗"):
+                            # Reset all states to resume refresh
                             st.session_state.is_editing_link = False
                             st.session_state.editing_job = None
                             st.session_state.clicked_link_button = False
@@ -598,11 +652,11 @@ else:
 
                             # Reset form state regardless of success/failure logging
                             st.session_state.show_respond_form[job_name] = False
-                            st.session_state.selected_priority.pop(
-                                job_name, None
+                            st.session_state.selected_priority[job_name] = (
+                                priority
                             )
-                            st.session_state.selected_assignee.pop(
-                                job_name, None
+                            st.session_state.selected_assignee[job_name] = (
+                                assignee
                             )
                             st.rerun()  # Force immediate refresh
                 else:
