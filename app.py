@@ -18,7 +18,6 @@ import pandas as pd
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
-
 from db_utils import (
     add_engineer,
     add_job_link,
@@ -355,14 +354,17 @@ if not ranked_jobs:
     )
 else:
     # Create columns for layout
-    col1, col2, col3, col4, col5 = st.columns(
-        [3, 1, 2, 2, 1]
-    )  # Changed col3 from 3 to 2
+    col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(
+        [3, 1, 1, 1, 2, 2, 1, 2]
+    )
     col1.markdown("**Job Name**")
     col2.markdown("**Status**")
-    col3.markdown("**Action / Incident Details**")
-    col4.markdown("**Response Time**")
-    col5.markdown("**Links**")
+    col3.markdown("**Responder**")
+    col4.markdown("**Priority**")
+    col5.markdown("**Response Time**")
+    col6.markdown("**Duration**")
+    col7.markdown("**Links**")
+    col8.markdown("**Action**")
 
     st.markdown("---")  # Separator
 
@@ -371,9 +373,9 @@ else:
         status = job.get("status", "Unknown")
         status_icon = STATUS_EMOJI.get(status, "❓")
 
-        col1, col2, col3, col4, col5 = st.columns(
-            [3, 1, 2, 2, 1]
-        )  # Changed col3 from 3 to 2
+        col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(
+            [3, 1, 1, 1, 2, 2, 1, 2]
+        )
         col1.markdown(f"**{job_name}**")
         col2.markdown(f"{status_icon} {status}")
 
@@ -381,15 +383,85 @@ else:
         is_critical_or_error = status in ["Critical", "Error"]
         active_incident_info = active_incidents.get(job_name)
 
-        with col3:  # Action / Incident Details column
+        with col3:  # Responder column
+            if active_incident_info:
+                st.markdown(f"**{active_incident_info['responder']}**")
+            else:
+                st.markdown("-")
+
+        with col4:  # Priority column
+            if active_incident_info:
+                st.markdown(f"**{active_incident_info['priority']}**")
+            else:
+                st.markdown("-")
+
+        with col5:  # Response Time column
+            if active_incident_info:
+                start_time = active_incident_info.get("start_time")
+                st.markdown(f"Ongoing: {display_time_ago(start_time)}")
+            else:
+                st.markdown("-")  # Placeholder if not active
+
+        with col6:  # Duration column
+            if active_incident_info and "start_time" in active_incident_info:
+                start_time = active_incident_info["start_time"]
+                duration = datetime.now() - start_time
+                hours = int(duration.total_seconds() // 3600)
+                minutes = int((duration.total_seconds() % 3600) // 60)
+                seconds = int(duration.total_seconds() % 60)
+                st.markdown(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+            else:
+                st.markdown("-")
+
+        with col7:  # Links column
+            # Display existing link if any
+            if job_name in st.session_state.job_links:
+                link_data = st.session_state.job_links[job_name]
+                st.markdown(f"🔗 [{link_data['text']}]({link_data['url']})")
+
+            # Only show link button if there's an active incident
+            if job_name in active_incidents:
+                # Add/Edit link button
+                if st.button("🔗", key=f"link_{job_name}"):
+                    st.session_state[f"show_link_form_{job_name}"] = True
+
+                # Link form
+                if st.session_state.get(f"show_link_form_{job_name}", False):
+                    with st.form(key=f"link_form_{job_name}"):
+                        link_url = st.text_input("URL", key=f"url_{job_name}")
+                        link_text = st.text_input(
+                            "Link Text", key=f"text_{job_name}"
+                        )
+
+                        col1, col2 = st.columns(2)
+                        if col1.form_submit_button("Save"):
+                            if link_url:
+                                if add_job_link(job_name, link_url, link_text):
+                                    st.session_state.job_links = (
+                                        get_job_links()
+                                    )  # Refresh links from DB
+                                    st.session_state[
+                                        f"show_link_form_{job_name}"
+                                    ] = False
+                                    st.rerun()
+                                else:
+                                    st.error(
+                                        "Failed to save link. Please try again."
+                                    )
+
+                        if col2.form_submit_button("Cancel"):
+                            st.session_state[f"show_link_form_{job_name}"] = (
+                                False
+                            )
+                            st.rerun()
+            else:
+                # Show a dot if no active incident
+                st.markdown("•")
+
+        with col8:  # Action button column
             if active_incident_info:
                 # Job is currently being responded to
                 incident_id = active_incident_info["incident_id"]
-                responder = active_incident_info["responder"]
-                priority = active_incident_info["priority"]
-                start_time = active_incident_info["start_time"]
-                st.info(f"Responding: {responder} ({priority})")
-
                 resolve_key = f"resolve_{job_name}_{incident_id}"
                 if st.button(
                     "Resolve Incident", key=resolve_key, type="primary"
@@ -492,59 +564,7 @@ else:
 
             else:
                 # Status is Warning or Log, no action needed
-                st.markdown("*(No immediate action)*")
-
-        with col4:  # Response Time column
-            if active_incident_info:
-                start_time = active_incident_info.get("start_time")
-                st.markdown(f"Ongoing: {display_time_ago(start_time)}")
-            else:
-                st.markdown("-")  # Placeholder if not active
-
-        with col5:  # Links column
-            # Display existing link if any
-            if job_name in st.session_state.job_links:
-                link_data = st.session_state.job_links[job_name]
-                st.markdown(f"🔗 [{link_data['text']}]({link_data['url']})")
-
-            # Only show link button if there's an active incident
-            if job_name in active_incidents:
-                # Add/Edit link button
-                if st.button("🔗", key=f"link_{job_name}"):
-                    st.session_state[f"show_link_form_{job_name}"] = True
-
-                # Link form
-                if st.session_state.get(f"show_link_form_{job_name}", False):
-                    with st.form(key=f"link_form_{job_name}"):
-                        link_url = st.text_input("URL", key=f"url_{job_name}")
-                        link_text = st.text_input(
-                            "Link Text", key=f"text_{job_name}"
-                        )
-
-                        col1, col2 = st.columns(2)
-                        if col1.form_submit_button("Save"):
-                            if link_url:
-                                if add_job_link(job_name, link_url, link_text):
-                                    st.session_state.job_links = (
-                                        get_job_links()
-                                    )  # Refresh links from DB
-                                    st.session_state[
-                                        f"show_link_form_{job_name}"
-                                    ] = False
-                                    st.rerun()
-                                else:
-                                    st.error(
-                                        "Failed to save link. Please try again."
-                                    )
-
-                        if col2.form_submit_button("Cancel"):
-                            st.session_state[f"show_link_form_{job_name}"] = (
-                                False
-                            )
-                            st.rerun()
-            else:
-                # Show a dot if no active incident
-                st.markdown("•")
+                st.markdown("*(No action)*")
 
         st.markdown("---")  # Separator between jobs
 
@@ -557,38 +577,61 @@ if history_df is not None and not history_df.empty:
     five_days_ago = pd.Timestamp.now() - pd.Timedelta(days=5)
     history_df = history_df[history_df["response_start_time"] >= five_days_ago]
 
-    # Format for display
-    history_df_display = history_df.copy()
-    time_cols = ["response_start_time", "resolution_time"]
-    for col in time_cols:
-        # Ensure the column exists and convert to datetime if needed
-        if col in history_df_display.columns:
-            history_df_display[col] = pd.to_datetime(
-                history_df_display[col]
-            ).dt.strftime("%Y-%m-%d %H:%M:%S")
+    # Create columns for layout
+    col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(
+        [1, 2, 2, 1, 2, 2, 2, 1]
+    )
+    col1.markdown("**ID**")
+    col2.markdown("**Job Name**")
+    col3.markdown("**Responder**")
+    col4.markdown("**Priority**")
+    col5.markdown("**Start Time**")
+    col6.markdown("**End Time**")
+    col7.markdown("**Duration**")
+    col8.markdown("**Links**")
 
-    if "resolution_duration_seconds" in history_df_display.columns:
-        history_df_display["duration_m"] = (
-            history_df_display["resolution_duration_seconds"] / 60
-        ).round(1)
-        history_df_display.drop(
-            columns=["resolution_duration_seconds"], inplace=True
-        )  # Drop original seconds col
-        # Reorder columns slightly
-        cols_order = [
-            "incident_id",
-            "job_name",
-            "status_at_incident",
-            "priority",
-            "responder_name",
-            "response_start_time",
-            "resolution_time",
-            "duration_m",
-        ]
-        # Filter out columns that might not exist if the table is empty initially
-        cols_order = [c for c in cols_order if c in history_df_display.columns]
-        history_df_display = history_df_display[cols_order]
+    st.markdown("---")  # Separator
 
-    st.dataframe(history_df_display, use_container_width=True)
+    for _, row in history_df.iterrows():
+        col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(
+            [1, 2, 2, 1, 2, 2, 2, 1]
+        )
+
+        # Format the time
+        start_time = pd.to_datetime(row["response_start_time"]).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        resolution_time = (
+            pd.to_datetime(row["resolution_time"]).strftime("%Y-%m-%d %H:%M:%S")
+            if pd.notna(row["resolution_time"])
+            else "-"
+        )
+
+        # Format duration in HH:MM:SS
+        if pd.notna(row["resolution_duration_seconds"]):
+            total_seconds = int(row["resolution_duration_seconds"])
+            hours = total_seconds // 3600
+            minutes = (total_seconds % 3600) // 60
+            seconds = total_seconds % 60
+            duration = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        else:
+            duration = "-"
+
+        col1.markdown(f"**{row['incident_id']}**")
+        col2.markdown(f"**{row['job_name']}**")
+        col3.markdown(f"{row['responder_name']}")
+        col4.markdown(f"**{row['priority']}**")
+        col5.markdown(start_time)
+        col6.markdown(resolution_time)
+        col7.markdown(duration)
+
+        with col8:  # Links column
+            if row["job_name"] in st.session_state.job_links:
+                link_data = st.session_state.job_links[row["job_name"]]
+                st.markdown(f"🔗 [{link_data['text']}]({link_data['url']})")
+            else:
+                st.markdown("•")
+
+        st.markdown("---")  # Separator between incidents
 else:
     st.markdown("No incident history recorded yet.")
