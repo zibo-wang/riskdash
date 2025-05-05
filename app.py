@@ -355,7 +355,7 @@ if not ranked_jobs:
 else:
     # Create columns for layout
     col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(
-        [3, 1, 1, 1, 2, 2, 1, 2]
+        [3, 1, 1, 1, 2, 2, 2, 2]
     )
     col1.markdown("**Job Name**")
     col2.markdown("**Status**")
@@ -374,7 +374,7 @@ else:
         status_icon = STATUS_EMOJI.get(status, "❓")
 
         col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(
-            [3, 1, 1, 1, 2, 2, 1, 2]
+            [3, 1, 1, 1, 2, 2, 2, 2]
         )
         col1.markdown(f"**{job_name}**")
         col2.markdown(f"{status_icon} {status}")
@@ -414,49 +414,67 @@ else:
                 st.markdown("-")
 
         with col7:  # Links column
-            # Display existing link if any
-            if job_name in st.session_state.job_links:
-                link_data = st.session_state.job_links[job_name]
-                st.markdown(f"🔗 [{link_data['text']}]({link_data['url']})")
+            # Create a container for the link and button
+            link_container = st.container()
+            with link_container:
+                link_col1, link_col2 = st.columns([4, 1])
 
-            # Only show link button if there's an active incident
-            if job_name in active_incidents:
-                # Add/Edit link button
-                if st.button("🔗", key=f"link_{job_name}"):
-                    st.session_state[f"show_link_form_{job_name}"] = True
-
-                # Link form
-                if st.session_state.get(f"show_link_form_{job_name}", False):
-                    with st.form(key=f"link_form_{job_name}"):
-                        link_url = st.text_input("URL", key=f"url_{job_name}")
-                        link_text = st.text_input(
-                            "Link Text", key=f"text_{job_name}"
+                with link_col1:
+                    # Display existing link if any
+                    if (
+                        active_incident_info
+                        and active_incident_info["incident_id"]
+                        in st.session_state.job_links
+                    ):
+                        link_data = st.session_state.job_links[
+                            active_incident_info["incident_id"]
+                        ]
+                        st.markdown(
+                            f"🔗 [{link_data['text']}]({link_data['url']})"
                         )
+                    else:
+                        st.markdown("•")
 
-                        col1, col2 = st.columns(2)
-                        if col1.form_submit_button("Save"):
-                            if link_url:
-                                if add_job_link(job_name, link_url, link_text):
-                                    st.session_state.job_links = (
-                                        get_job_links()
-                                    )  # Refresh links from DB
-                                    st.session_state[
-                                        f"show_link_form_{job_name}"
-                                    ] = False
-                                    st.rerun()
-                                else:
-                                    st.error(
-                                        "Failed to save link. Please try again."
-                                    )
-
-                        if col2.form_submit_button("Cancel"):
+                with link_col2:
+                    # Only show link button if there's an active incident
+                    if job_name in active_incidents:
+                        # Add/Edit link button
+                        if st.button("🔗", key=f"link_{job_name}"):
                             st.session_state[f"show_link_form_{job_name}"] = (
-                                False
+                                True
                             )
-                            st.rerun()
-            else:
-                # Show a dot if no active incident
-                st.markdown("•")
+
+            # Link form
+            if st.session_state.get(f"show_link_form_{job_name}", False):
+                with st.form(key=f"link_form_{job_name}"):
+                    link_url = st.text_input("URL", key=f"url_{job_name}")
+                    link_text = st.text_input(
+                        "Link Text", key=f"text_{job_name}"
+                    )
+
+                    col1, col2 = st.columns(2)
+                    if col1.form_submit_button("✓"):
+                        if link_url and active_incident_info:
+                            if add_job_link(
+                                active_incident_info["incident_id"],
+                                link_url,
+                                link_text,
+                            ):
+                                st.session_state.job_links = (
+                                    get_job_links()
+                                )  # Refresh links from DB
+                                st.session_state[
+                                    f"show_link_form_{job_name}"
+                                ] = False
+                                st.rerun()
+                            else:
+                                st.error(
+                                    "Failed to save link. Please try again."
+                                )
+
+                    if col2.form_submit_button("✗"):
+                        st.session_state[f"show_link_form_{job_name}"] = False
+                        st.rerun()
 
         with col8:  # Action button column
             if active_incident_info:
@@ -626,8 +644,8 @@ if history_df is not None and not history_df.empty:
         col7.markdown(duration)
 
         with col8:  # Links column
-            if row["job_name"] in st.session_state.job_links:
-                link_data = st.session_state.job_links[row["job_name"]]
+            if row["incident_id"] in st.session_state.job_links:
+                link_data = st.session_state.job_links[row["incident_id"]]
                 st.markdown(f"🔗 [{link_data['text']}]({link_data['url']})")
             else:
                 st.markdown("•")
