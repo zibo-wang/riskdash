@@ -43,6 +43,16 @@ def init_db():
                 );
             """)
 
+            # Add job links table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS job_links (
+                    job_name VARCHAR PRIMARY KEY,
+                    url VARCHAR NOT NULL,
+                    link_text VARCHAR,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+
             # Insert default engineers if table is empty
             result = conn.execute("SELECT COUNT(*) FROM engineers").fetchone()[
                 0
@@ -282,6 +292,61 @@ def remove_engineer(name):
             success = True
         except Exception as e:
             print(f"Error removing engineer: {e}")
+        finally:
+            conn.close()
+    return success
+
+
+def get_job_links():
+    """Returns a dictionary of job links."""
+    links = {}
+    conn = get_db_connection()
+    try:
+        results = conn.execute(
+            "SELECT job_name, url, link_text FROM job_links"
+        ).fetchall()
+        for job_name, url, link_text in results:
+            links[job_name] = {"url": url, "text": link_text or url}
+    except Exception as e:
+        print(f"Error fetching job links: {e}")
+    finally:
+        conn.close()
+    return links
+
+
+def add_job_link(job_name, url, link_text=None):
+    """Adds or updates a link for a job."""
+    success = False
+    with db_lock:
+        conn = get_db_connection()
+        try:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO job_links (job_name, url, link_text)
+                VALUES (?, ?, ?)
+            """,
+                (job_name, url, link_text),
+            )
+            success = True
+        except Exception as e:
+            print(f"Error adding job link: {e}")
+        finally:
+            conn.close()
+    return success
+
+
+def remove_job_link(job_name):
+    """Removes a link for a job."""
+    success = False
+    with db_lock:
+        conn = get_db_connection()
+        try:
+            conn.execute(
+                "DELETE FROM job_links WHERE job_name = ?", (job_name,)
+            )
+            success = True
+        except Exception as e:
+            print(f"Error removing job link: {e}")
         finally:
             conn.close()
     return success

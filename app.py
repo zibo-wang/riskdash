@@ -8,13 +8,16 @@ import streamlit as st
 import streamlit.components.v1 as components
 from db_utils import (
     add_engineer,
+    add_job_link,
     get_active_incidents,
     get_engineers,
     get_incident_history,
+    get_job_links,
     init_db,
     log_incident_resolve,
     log_incident_start,
     remove_engineer,
+    remove_job_link,
 )
 
 # --- Configuration ---
@@ -42,8 +45,32 @@ if "selected_assignee" not in st.session_state:
     st.session_state.selected_assignee = {}  # Dict: {job_name: assignee}
 if "show_engineer_form" not in st.session_state:
     st.session_state.show_engineer_form = False
+if "last_refresh_time" not in st.session_state:
+    st.session_state.last_refresh_time = datetime.now()
+if "last_incident_update" not in st.session_state:
+    st.session_state.last_incident_update = datetime.now()
 
 # --- Helper Functions ---
+
+
+def check_for_updates():
+    """Checks if there have been any changes to active incidents since last refresh."""
+    current_active = get_active_incidents()
+    current_time = datetime.now()
+
+    # If the active incidents have changed, update the last incident update time
+    if current_active != st.session_state.get("last_active_incidents", {}):
+        st.session_state.last_incident_update = current_time
+        st.session_state.last_active_incidents = current_active
+        return True
+
+    # If it's been more than 30 seconds since last update, force a refresh
+    if (
+        current_time - st.session_state.last_incident_update
+    ).total_seconds() > 30:
+        return True
+
+    return False
 
 
 @st.cache_data(ttl=REFRESH_INTERVAL_SECONDS)  # Cache API data for interval
@@ -75,12 +102,32 @@ def fetch_job_status(api_url):
 
 
 def rank_jobs(jobs):
-    """Sorts jobs by critical level."""
+    """Sorts jobs by critical level and pins responding jobs to the top."""
     if jobs is None:
         return []
-    return sorted(
-        jobs, key=lambda x: STATUS_ORDER.get(x.get("status", "Log"), 99)
+
+    # Get active incidents to check which jobs are being responded to
+    active_incidents = get_active_incidents()
+
+    # Split jobs into responding and non-responding
+    responding_jobs = []
+    non_responding_jobs = []
+
+    for job in jobs:
+        job_name = job.get("name", "Unknown Job")
+        if job_name in active_incidents:
+            responding_jobs.append(job)
+        else:
+            non_responding_jobs.append(job)
+
+    # Sort non-responding jobs by status
+    sorted_non_responding = sorted(
+        non_responding_jobs,
+        key=lambda x: STATUS_ORDER.get(x.get("status", "Log"), 99),
     )
+
+    # Combine lists with responding jobs first
+    return responding_jobs + sorted_non_responding
 
 
 def display_time_ago(dt_object):
@@ -116,34 +163,42 @@ L1_ENGINEERS = engineers["L1"]
 L2_ENGINEERS = engineers["L2"]
 ALL_ENGINEERS = sorted(L1_ENGINEERS + L2_ENGINEERS)
 
-# Display current engineers
+# Always display current engineers
 st.sidebar.markdown("**L1 Support:**")
 for name in L1_ENGINEERS:
-    col1, col2 = st.sidebar.columns([3, 1])
-    col1.markdown(f"- {name}")
-    if col2.button("❌", key=f"remove_{name}"):
-        if remove_engineer(name):
-            st.rerun()
+    st.sidebar.markdown(f"- {name}")
 
 st.sidebar.markdown("**L2 Support:**")
 for name in L2_ENGINEERS:
-    col1, col2 = st.sidebar.columns([3, 1])
-    col1.markdown(f"- {name}")
-    if col2.button("❌", key=f"remove_{name}"):
-        if remove_engineer(name):
-            st.rerun()
+    st.sidebar.markdown(f"- {name}")
 
-# Add new engineer form
-if st.sidebar.button("➕ Add Engineer"):
+# Edit engineers button
+if st.sidebar.button("✏️ Edit Engineers"):
     st.session_state.show_engineer_form = True
 
 if st.session_state.show_engineer_form:
-    with st.sidebar.form("add_engineer_form"):
+    with st.sidebar.form("engineer_management_form"):
+        st.markdown("**Engineer Management**")
+
+        # Remove engineer section
+        st.markdown("**Remove Engineer**")
+        engineer_to_remove = st.selectbox(
+            "Select engineer to remove",
+            [""] + ALL_ENGINEERS,
+            format_func=lambda x: "Select an engineer..." if x == "" else x,
+        )
+        if st.form_submit_button("Remove Selected"):
+            if engineer_to_remove:
+                if remove_engineer(engineer_to_remove):
+                    st.rerun()
+
+        st.markdown("---")
         st.markdown("**Add New Engineer**")
         new_name = st.text_input("Name")
         new_level = st.radio("Level", ["L1", "L2"], horizontal=True)
-        submitted = st.form_submit_button("Add")
-        if submitted:
+
+        col1, col2 = st.columns(2)
+        if col1.form_submit_button("Add"):
             if new_name and new_name not in ALL_ENGINEERS:
                 if add_engineer(new_name, new_level):
                     st.session_state.show_engineer_form = False
@@ -152,20 +207,48 @@ if st.session_state.show_engineer_form:
                     st.error("Failed to add engineer. Please try again.")
             else:
                 st.error("Please enter a valid, unique name.")
-        if st.form_submit_button("Cancel"):
+
+        if col2.form_submit_button("Close"):
             st.session_state.show_engineer_form = False
             st.rerun()
 
 st.sidebar.markdown("---")
 
+# Initialize links in session state if not exists
+if "job_links" not in st.session_state:
+    st.session_state.job_links = get_job_links()
+
 # Fetch and display data
+st.subheader("Job Status Overview")
+
+# Create a container for refresh info and align it to the right
+refresh_container = st.container()
+with refresh_container:
+    col1, col2 = st.columns([6, 1])  # Use most of the space for padding
+    with col2:
+        refresh_col1, refresh_col2 = st.columns([2, 1])
+        with refresh_col1:
+            st.markdown(
+                f"Last refresh: {st.session_state.last_refresh_time.strftime('%H:%M:%S')}",
+                unsafe_allow_html=True,
+            )
+        with refresh_col2:
+            if st.button("🔄", key="refresh_button"):
+                st.session_state.last_refresh_time = datetime.now()
+                st.cache_data.clear()  # Clear the cache to force a new API fetch
+                st.rerun()
+
+# Check for updates and force refresh if needed
+if check_for_updates():
+    st.session_state.last_refresh_time = datetime.now()
+    st.cache_data.clear()
+    st.rerun()
+
 api_jobs_raw = fetch_job_status(API_ENDPOINT)
 ranked_jobs = rank_jobs(api_jobs_raw)
 active_incidents = (
     get_active_incidents()
 )  # Get jobs currently being responded to
-
-st.subheader("Job Status Overview")
 
 if not ranked_jobs:
     st.warning(
@@ -173,11 +256,14 @@ if not ranked_jobs:
     )
 else:
     # Create columns for layout
-    col1, col2, col3, col4 = st.columns([3, 1, 3, 2])  # Adjust widths as needed
+    col1, col2, col3, col4, col5 = st.columns(
+        [3, 1, 2, 2, 1]
+    )  # Changed col3 from 3 to 2
     col1.markdown("**Job Name**")
     col2.markdown("**Status**")
     col3.markdown("**Action / Incident Details**")
     col4.markdown("**Response Time**")
+    col5.markdown("**Links**")
 
     st.markdown("---")  # Separator
 
@@ -186,9 +272,9 @@ else:
         status = job.get("status", "Unknown")
         status_icon = STATUS_EMOJI.get(status, "❓")
 
-        col1, col2, col3, col4 = st.columns(
-            [3, 1, 3, 2]
-        )  # Columns for each job row
+        col1, col2, col3, col4, col5 = st.columns(
+            [3, 1, 2, 2, 1]
+        )  # Changed col3 from 3 to 2
         col1.markdown(f"**{job_name}**")
         col2.markdown(f"{status_icon} {status}")
 
@@ -313,6 +399,51 @@ else:
             else:
                 st.markdown("-")  # Placeholder if not active
 
+        with col5:  # Links column
+            # Display existing link if any
+            if job_name in st.session_state.job_links:
+                link_data = st.session_state.job_links[job_name]
+                st.markdown(f"🔗 [{link_data['text']}]({link_data['url']})")
+
+            # Only show link button if there's an active incident
+            if job_name in active_incidents:
+                # Add/Edit link button
+                if st.button("🔗", key=f"link_{job_name}"):
+                    st.session_state[f"show_link_form_{job_name}"] = True
+
+                # Link form
+                if st.session_state.get(f"show_link_form_{job_name}", False):
+                    with st.form(key=f"link_form_{job_name}"):
+                        link_url = st.text_input("URL", key=f"url_{job_name}")
+                        link_text = st.text_input(
+                            "Link Text", key=f"text_{job_name}"
+                        )
+
+                        col1, col2 = st.columns(2)
+                        if col1.form_submit_button("Save"):
+                            if link_url:
+                                if add_job_link(job_name, link_url, link_text):
+                                    st.session_state.job_links = (
+                                        get_job_links()
+                                    )  # Refresh links from DB
+                                    st.session_state[
+                                        f"show_link_form_{job_name}"
+                                    ] = False
+                                    st.rerun()
+                                else:
+                                    st.error(
+                                        "Failed to save link. Please try again."
+                                    )
+
+                        if col2.form_submit_button("Cancel"):
+                            st.session_state[f"show_link_form_{job_name}"] = (
+                                False
+                            )
+                            st.rerun()
+            else:
+                # Show a dot if no active incident
+                st.markdown("•")
+
         st.markdown("---")  # Separator between jobs
 
 # --- Incident History ---
@@ -320,6 +451,10 @@ st.subheader("Recent Incident History")
 history_df = get_incident_history(limit=20)
 
 if history_df is not None and not history_df.empty:
+    # Filter out incidents older than 5 days
+    five_days_ago = pd.Timestamp.now() - pd.Timedelta(days=5)
+    history_df = history_df[history_df["response_start_time"] >= five_days_ago]
+
     # Format for display
     history_df_display = history_df.copy()
     time_cols = ["response_start_time", "resolution_time"]
@@ -373,15 +508,14 @@ components.html(
             const forms = window.parent.document.querySelectorAll('form');
             let formActive = false;
             forms.forEach(form => {{
-                // Simple check if form has focus or child elements have focus
-                 if (form.contains(window.parent.document.activeElement)) {{
-                     formActive = true;
-                 }}
+                if (form.contains(window.parent.document.activeElement)) {{
+                    formActive = true;
+                }}
             }});
 
             // Also check for common Streamlit modal/dialog elements if necessary
-            const modals = window.parent.document.querySelectorAll('[data-testid="stModal"]'); // Streamlit modal selector
-             let modalActive = modals.length > 0 && modals[0].style.display !== 'none'; // Check if modal exists and is visible
+            const modals = window.parent.document.querySelectorAll('[data-testid="stModal"]');
+            let modalActive = modals.length > 0 && modals[0].style.display !== 'none';
 
             // Only reload if no form or modal seems active
             if (!formActive && !modalActive) {{
@@ -394,13 +528,11 @@ components.html(
         // Set interval
         const intervalId = setInterval(reloadPage, interval);
 
-        // Optional: Clear interval if the component is ever removed
-        // (Streamlit usually re-runs the whole script, so this might not be strictly necessary)
-        // return () => clearInterval(intervalId); // This syntax doesn't work directly in st.html
-
+        // Clear interval if the component is ever removed
+        return () => clearInterval(intervalId);
     </script>
     """,
-    height=0,  # Make the component invisible
+    height=0,
     width=0,
 )
 # Make sure to import `
