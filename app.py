@@ -11,9 +11,12 @@ The dashboard features:
 - Auto-refresh functionality
 """
 
+import asyncio
 import time
 from datetime import datetime
+from typing import Any, Dict, List
 
+import aiohttp
 import pandas as pd
 import requests
 import streamlit as st
@@ -39,6 +42,8 @@ API_ENDPOINT = (
 )
 REFRESH_INTERVAL_SECONDS = 10  # How often to fetch API status
 CACHE_TTL = 5  # Cache TTL in seconds
+MAX_CONCURRENT_REQUESTS = 50  # Maximum number of concurrent API requests
+TIMEOUT = aiohttp.ClientTimeout(total=5)  # 5 second timeout
 
 # Enable auto-refresh
 st.set_page_config(
@@ -123,8 +128,8 @@ init_db()
 
 # --- Caching Functions ---
 @st.cache_data(ttl=CACHE_TTL)
-def fetch_job_status(api_url):
-    """Fetches job status list from the API.
+def fetch_job_status(api_url: str) -> List[Dict[str, Any]]:
+    """Fetches job status list from the API using concurrent requests.
 
     Args:
         api_url (str): URL of the API endpoint to fetch job status from.
@@ -134,28 +139,124 @@ def fetch_job_status(api_url):
               Each job dictionary should contain at least 'name' and 'status' keys.
     """
     try:
-        response = requests.get(api_url, timeout=5)  # Reduced timeout
-        response.raise_for_status()
-        jobs = response.json()
-        # Basic validation
-        if not isinstance(jobs, list):
-            st.error(f"API Error: Expected a list of jobs, got {type(jobs)}")
-            return None
-        for job in jobs:
-            if (
-                not isinstance(job, dict)
-                or "name" not in job
-                or "status" not in job
-            ):
-                st.error(f"API Error: Invalid job format found: {job}")
-                return None
+        # Run the async function in the event loop
+        jobs = asyncio.run(fetch_job_status_concurrent(api_url))
+        if jobs is None:
+            return []
         return jobs
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
+        st.error(f"Error fetching job status: {e}")
+        return []
+
+
+async def fetch_job_status_concurrent(api_url: str) -> List[Dict[str, Any]]:
+    """Async function to fetch job status list from the API.
+
+    Args:
+        api_url (str): URL of the API endpoint to fetch job status from.
+
+    Returns:
+        list: List of job status dictionaries.
+    """
+    try:
+        async with aiohttp.ClientSession(timeout=TIMEOUT) as session:
+            async with session.get(api_url) as response:
+                if response.status != 200:
+                    st.error(f"API Error: Status code {response.status}")
+                    return []
+
+                jobs = await response.json()
+
+                # Basic validation
+                if not isinstance(jobs, list):
+                    st.error(
+                        f"API Error: Expected a list of jobs, got {type(jobs)}"
+                    )
+                    return []
+
+                for job in jobs:
+                    if (
+                        not isinstance(job, dict)
+                        or "name" not in job
+                        or "status" not in job
+                    ):
+                        st.error(f"API Error: Invalid job format found: {job}")
+                        return []
+
+                return jobs
+    except aiohttp.ClientError as e:
         st.error(f"API Error: Could not fetch job status: {e}")
-        return None
+        return []
     except Exception as e:
         st.error(f"An unexpected error occurred during API fetch: {e}")
-        return None
+        return []
+
+
+@st.cache_data(ttl=CACHE_TTL)
+def fetch_multiple_job_statuses(api_urls: List[str]) -> List[Dict[str, Any]]:
+    """Fetches multiple job statuses concurrently.
+
+    Args:
+        api_urls (List[str]): List of API URLs to fetch from.
+
+    Returns:
+        List[Dict[str, Any]]: Combined list of job statuses.
+    """
+    try:
+        return asyncio.run(fetch_multiple_job_statuses_async(api_urls))
+    except Exception as e:
+        st.error(f"Error fetching multiple job statuses: {e}")
+        return []
+
+
+async def fetch_multiple_job_statuses_async(
+    api_urls: List[str],
+) -> List[Dict[str, Any]]:
+    """Async function to fetch multiple job statuses.
+
+    Args:
+        api_urls (List[str]): List of API URLs to fetch from.
+
+    Returns:
+        List[Dict[str, Any]]: Combined list of job statuses.
+    """
+    tasks = []
+    async with aiohttp.ClientSession() as session:
+        # Create tasks for each URL
+        for url in api_urls:
+            tasks.append(fetch_single_job_status(session, url))
+
+        # Execute tasks in batches to limit concurrency
+        results = []
+        for i in range(0, len(tasks), MAX_CONCURRENT_REQUESTS):
+            batch = tasks[i : i + MAX_CONCURRENT_REQUESTS]
+            batch_results = await asyncio.gather(*batch, return_exceptions=True)
+            results.extend(
+                [r for r in batch_results if not isinstance(r, Exception)]
+            )
+
+        return results
+
+
+async def fetch_single_job_status(
+    session: aiohttp.ClientSession, url: str
+) -> Dict[str, Any]:
+    """Fetches a single job status.
+
+    Args:
+        session (aiohttp.ClientSession): The aiohttp session to use.
+        url (str): The URL to fetch from.
+
+    Returns:
+        Dict[str, Any]: The job status data.
+    """
+    try:
+        async with session.get(url) as response:
+            if response.status == 200:
+                return await response.json()
+            return {}
+    except Exception:
+        return {}
 
 
 @st.cache_data(ttl=CACHE_TTL)
