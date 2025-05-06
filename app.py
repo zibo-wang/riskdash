@@ -120,6 +120,7 @@ st.session_state.last_refresh_time = datetime.now()
 STATUS_ORDER = {"Critical": 0, "Error": 1, "Warning": 2, "Log": 3}
 STATUS_EMOJI = {"Critical": "🔥", "Error": "❌", "Warning": "⚠️", "Log": "📄"}
 PRIORITY_LEVELS = ["P1", "P2", "P3", "P4"]
+DEFAULT_PRIORITY = "P3"  # Default priority level
 
 # --- Initialize Database ---
 # Ensure the table exists when the app starts
@@ -394,19 +395,8 @@ def check_slow_response(job_name, status):
             print(f"Debug - {job_name}: Is slow response: {is_slow}")
             return is_slow
         else:
-            # If no incident record exists, create one with current detection time
-            current_time = datetime.now()
-            conn.execute(
-                """
-                INSERT INTO incidents (job_name, status, detection_time)
-                VALUES (?, ?, ?)
-                """,
-                (job_name, status, current_time),
-            )
-            conn.commit()
-            print(
-                f"Debug - {job_name}: Created new incident record at {current_time}"
-            )
+            # Don't create a new incident record here - only check existing ones
+            print(f"Debug - {job_name}: No active incident found")
             return False
     except Exception as e:
         print(f"Error checking slow response: {e}")
@@ -692,7 +682,11 @@ if api_jobs_raw is not None:
                                     PRIORITY_LEVELS,
                                     key=f"new_priority_{job_name}",
                                     horizontal=True,
-                                    index=PRIORITY_LEVELS.index(priority),
+                                    index=PRIORITY_LEVELS.index(
+                                        st.session_state.selected_priority.get(
+                                            job_name, DEFAULT_PRIORITY
+                                        )
+                                    ),
                                 )
                                 col1, col2 = st.columns(2)
                                 with col1:
@@ -912,9 +906,9 @@ if api_jobs_raw is not None:
                                     horizontal=True,
                                     index=PRIORITY_LEVELS.index(
                                         st.session_state.selected_priority.get(
-                                            job_name, "P3"
+                                            job_name, DEFAULT_PRIORITY
                                         )
-                                    ),  # Default P3
+                                    ),
                                 )
                                 assignee = st.selectbox(
                                     "Assign To:",
@@ -977,7 +971,7 @@ if api_jobs_raw is not None:
                                 )
                                 # Pre-populate state for form defaults if needed
                                 st.session_state.selected_priority[job_name] = (
-                                    "P3"
+                                    DEFAULT_PRIORITY
                                 )
                                 st.session_state.selected_assignee[job_name] = (
                                     ALL_ENGINEERS[0]
