@@ -113,14 +113,13 @@ def log_incident_start(job_name, status, responder, priority):
         int: The incident ID if successful, -1 if failed or if incident already exists.
     """
     start_time = datetime.datetime.now()
-    detection_time = start_time  # For now, use the same time as start time
     incident_id = -1
     with db_lock:
         conn = get_db_connection()
         try:
             # Check if there's already an *active* incident for this job
             existing = conn.execute(
-                "SELECT incident_id FROM incidents WHERE job_name = ? AND resolution_time IS NULL",
+                "SELECT incident_id, detection_time FROM incidents WHERE job_name = ? AND resolution_time IS NULL",
                 [job_name],
             ).fetchone()
 
@@ -135,6 +134,18 @@ def log_incident_start(job_name, status, responder, priority):
                     "SELECT COALESCE(MAX(incident_id), 0) FROM incidents"
                 ).fetchone()[0]
                 next_id = max_id + 1
+
+                # Get the detection time from the most recent incident record
+                detection_time_result = conn.execute(
+                    "SELECT detection_time FROM incidents WHERE job_name = ? ORDER BY detection_time DESC LIMIT 1",
+                    [job_name],
+                ).fetchone()
+
+                if detection_time_result:
+                    detection_time = detection_time_result[0]
+                else:
+                    # If no previous detection time exists, use current time
+                    detection_time = start_time
 
                 cursor = conn.execute(
                     """
@@ -154,7 +165,7 @@ def log_incident_start(job_name, status, responder, priority):
                 )
                 incident_id = cursor.fetchone()[0]
                 print(
-                    f"Logged incident start for {job_name}, ID: {incident_id}"
+                    f"Logged incident start for {job_name}, ID: {incident_id}, Detection: {detection_time}, Start: {start_time}"
                 )
 
                 # --- Inform the API Mock (REMOVE THIS IN PRODUCTION) ---
@@ -242,7 +253,7 @@ def get_active_incidents():
 
     Returns:
         dict: A dictionary mapping job names to incident details. Each incident detail
-              contains incident_id, responder, priority, and start_time.
+              contains incident_id, responder, priority, start_time, and detection_time.
     """
     active = {}
     conn = get_db_connection()
@@ -250,7 +261,7 @@ def get_active_incidents():
         # Use read_committed isolation level if needed, default should be okay for reads
         results = conn.execute(
             """
-            SELECT incident_id, job_name, responder_name, priority, response_start_time
+            SELECT incident_id, job_name, responder_name, priority, response_start_time, detection_time
             FROM incidents
             WHERE resolution_time IS NULL
             ORDER BY response_start_time DESC
@@ -263,6 +274,7 @@ def get_active_incidents():
                 "responder": row[2],
                 "priority": row[3],
                 "start_time": row[4],
+                "detection_time": row[5],
             }
             for row in results
         }

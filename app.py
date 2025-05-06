@@ -267,44 +267,46 @@ def check_slow_response(job_name, status):
         print(f"Debug - {job_name}: Already being responded to")
         return False
 
-    # Get the incident from database to check response time
+    # Get the incident from database to check detection time
     conn = get_db_connection()
     try:
         result = conn.execute(
             """
-            SELECT response_start_time, detection_time
+            SELECT detection_time
             FROM incidents 
             WHERE job_name = ? 
             AND resolution_time IS NULL 
-            ORDER BY response_start_time DESC 
+            ORDER BY detection_time DESC 
             LIMIT 1
             """,
             [job_name],
         ).fetchone()
 
         if result:
-            response_start_time, detection_time = result
-            # If no one has responded yet, use detection time
-            if response_start_time is None:
-                elapsed_seconds = (
-                    datetime.now() - detection_time
-                ).total_seconds()
-                print(
-                    f"Debug - {job_name}: No response yet, using detection time. Elapsed: {elapsed_seconds:.1f}s"
-                )
-            else:
-                elapsed_seconds = (
-                    datetime.now() - response_start_time
-                ).total_seconds()
-                print(
-                    f"Debug - {job_name}: Using response time. Elapsed: {elapsed_seconds:.1f}s"
-                )
-
+            detection_time = result[0]
+            current_time = datetime.now()
+            elapsed_seconds = (current_time - detection_time).total_seconds()
+            print(
+                f"Debug - {job_name}: Using detection time. Elapsed: {elapsed_seconds:.1f}s"
+            )
             is_slow = elapsed_seconds > 20
             print(f"Debug - {job_name}: Is slow response: {is_slow}")
             return is_slow
         else:
-            print(f"Debug - {job_name}: No active incident found")
+            # If no incident record exists, create one with current detection time
+            current_time = datetime.now()
+            conn.execute(
+                """
+                INSERT INTO incidents (job_name, status, detection_time)
+                VALUES (?, ?, ?)
+                """,
+                (job_name, status, current_time),
+            )
+            conn.commit()
+            print(
+                f"Debug - {job_name}: Created new incident record at {current_time}"
+            )
+            return False
     except Exception as e:
         print(f"Error checking slow response: {e}")
     finally:
@@ -498,17 +500,18 @@ if api_jobs_raw is not None:
         )
     else:
         # Create columns for layout
-        col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(
-            [3, 1, 1, 1.5, 2, 2, 2, 2]
+        col1, col2, col3, col4, col5, col6, col7, col8, col9 = st.columns(
+            [3, 1, 1, 1.5, 2, 2, 2, 2, 2]
         )
         col1.markdown("**Job Name**")
         col2.markdown("**Status**")
         col3.markdown("**Responder**")
         col4.markdown("**Priority**")
-        col5.markdown("**Response Time**")
-        col6.markdown("**Duration**")
-        col7.markdown("**Links**")
-        col8.markdown("**Action**")
+        col5.markdown("**Started**")
+        col6.markdown("**Detected**")
+        col7.markdown("**Duration**")
+        col8.markdown("**INC Link**")
+        col9.markdown("**Action**")
 
         st.markdown("---")  # Separator
 
@@ -525,8 +528,8 @@ if api_jobs_raw is not None:
             # Create a container for the row
             with st.container():
                 # Create columns for the row content
-                col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(
-                    [3, 1, 1, 1.3, 2, 2, 2, 2]
+                col1, col2, col3, col4, col5, col6, col7, col8, col9 = (
+                    st.columns([3, 1, 1, 1.5, 2, 2, 2, 2, 2])
                 )
 
                 # Add flashing indicator and job name in the first column
@@ -628,28 +631,50 @@ if api_jobs_raw is not None:
                     else:
                         st.markdown("-")
 
-                with col5:  # Response Time column
+                with col5:  # Started column
                     if active_incident_info:
                         start_time = active_incident_info.get("start_time")
-                        st.markdown(f"Ongoing: {display_time_ago(start_time)}")
+                        if start_time:
+                            current_time = datetime.now()
+                            st.markdown(f"{display_time_ago(start_time)}")
+                        else:
+                            st.markdown("Not started")
                     else:
                         st.markdown("-")  # Placeholder if not active
 
-                with col6:  # Duration column
-                    if (
-                        active_incident_info
-                        and "start_time" in active_incident_info
-                    ):
-                        start_time = active_incident_info["start_time"]
-                        duration = datetime.now() - start_time
-                        hours = int(duration.total_seconds() // 3600)
-                        minutes = int((duration.total_seconds() % 3600) // 60)
-                        seconds = int(duration.total_seconds() % 60)
-                        st.markdown(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+                with col6:  # Detected column
+                    if active_incident_info:
+                        detection_time = active_incident_info.get(
+                            "detection_time"
+                        )
+                        if detection_time:
+                            current_time = datetime.now()
+                            st.markdown(f"{display_time_ago(detection_time)}")
+                        else:
+                            st.markdown("-")
                     else:
                         st.markdown("-")
 
-                with col7:  # Links column
+                with col7:  # Duration column
+                    if active_incident_info:
+                        start_time = active_incident_info.get("start_time")
+                        if start_time:
+                            current_time = datetime.now()
+                            duration = current_time - start_time
+                            hours = int(duration.total_seconds() // 3600)
+                            minutes = int(
+                                (duration.total_seconds() % 3600) // 60
+                            )
+                            seconds = int(duration.total_seconds() % 60)
+                            st.markdown(
+                                f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+                            )
+                        else:
+                            st.markdown("-")
+                    else:
+                        st.markdown("-")
+
+                with col8:  # Links column
                     # Create a container for the link and button
                     link_container = st.container()
                     with link_container:
@@ -738,7 +763,7 @@ if api_jobs_raw is not None:
 
                 st.markdown("</div>", unsafe_allow_html=True)
 
-                with col8:  # Action button column
+                with col9:  # Action button column
                     if active_incident_info:
                         # Job is currently being responded to
                         incident_id = active_incident_info["incident_id"]
